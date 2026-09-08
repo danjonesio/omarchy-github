@@ -8,8 +8,8 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "robzolkos.github"
-  ipcTarget: "robzolkos.github"
+  moduleName: "io.github.danjonesio.github"
+  ipcTarget: "io.github.danjonesio.github"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -174,8 +174,18 @@ Panel {
     return "no checks"
   }
 
+  // Host must be github.com or gist.github.com, then "/" or end of string, so
+  // github.com.evil.com and javascript: / file: URLs cannot pass.
+  function allowedGithubUrl(url) {
+    var value = String(url || "").trim()
+    if (value === "") return ""
+    if (!/^https:\/\/(gist\.)?github\.com(\/|$)/i.test(value)) return ""
+    if (/[\s\\]/.test(value)) return ""
+    return value
+  }
+
   function openUrl(url) {
-    var value = String(url || "")
+    var value = allowedGithubUrl(url)
     if (value === "") return
     // Let the default URL handler route browser tabs to the intended workspace.
     if (github.linkBehavior === "Browser tab") Util.execArgv(["xdg-open", value])

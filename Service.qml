@@ -300,50 +300,32 @@ Item {
         startQueuedMark();
     }
 
-    function canonicalNotificationTimestamp(value) {
-        var text = String(value || "");
-        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(text))
-            return "";
-
-        var milliseconds = Date.parse(text);
-        if (!isFinite(milliseconds) || new Date(milliseconds).toISOString().replace(".000Z", "Z") !== text)
-            return "";
-
-        return milliseconds <= Date.now() ? text : "";
-    }
-
-    // Capture the exact displayed boundary on the first click. The panel binds
+    // Capture the exact displayed thread IDs on the first click. The panel binds
     // confirmation to notificationsRevision, so any refresh invalidates this
-    // prepared value before the destructive second click can run.
+    // prepared value before the destructive second click can run. Only these IDs
+    // are PATCHed; a last_read_at bulk mark is never used.
     function prepareMarkAllNotificationsRead() {
         if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)
             return "";
 
-        var boundary = "";
+        var ids = [];
+        var seen = {};
         for (var i = 0; i < notifications.length; i++) {
-            var updated = canonicalNotificationTimestamp(notifications[i].updatedAt);
-            if (updated === "") {
-                notificationActionStatus = "Refresh before marking everything read.";
-                actionStatusTimer.restart();
-                return "";
-            }
-            if (updated > boundary)
-                boundary = updated;
-        }
-
-        var boundaryIds = [];
-        for (var j = 0; j < notifications.length; j++) {
-            if (String(notifications[j].updatedAt || "") !== boundary)
-                continue;
-            var id = String(notifications[j].id || "");
+            var id = String(notifications[i].id || "");
             if (!/^\d+$/.test(id)) {
                 notificationActionStatus = "Refresh before marking everything read.";
                 actionStatusTimer.restart();
                 return "";
             }
-            boundaryIds.push(id);
+            if (seen[id])
+                continue;
+            seen[id] = true;
+            ids.push(id);
         }
-        return JSON.stringify({boundary: boundary, boundaryIds: boundaryIds, revision: notificationsRevision});
+        if (ids.length === 0)
+            return "";
+
+        return JSON.stringify({ids: ids, revision: notificationsRevision});
     }
 
     function markAllNotificationsRead(prepared) {
@@ -368,15 +350,22 @@ Item {
             return ;
         }
 
+        var ids = Array.isArray(snapshot.ids) ? snapshot.ids : [];
+        if (ids.length === 0) {
+            notificationActionStatus = "Refresh before marking everything read.";
+            actionStatusTimer.restart();
+            return ;
+        }
+
         actionStatusTimer.stop();
         markingAllNotifications = true;
         markingAllNotificationIds = hideAllNotifications();
         notificationActionStatus = "Marking all notifications read…";
         _markStdout = "";
         _markStderr = "";
-        var commandLine = [helperPath(), "--mark-all-read-before", String(snapshot.boundary || "")];
-        for (var i = 0; i < snapshot.boundaryIds.length; i++)
-            commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[i]));
+        var commandLine = [helperPath()];
+        for (var i = 0; i < ids.length; i++)
+            commandLine.push("--mark-notification-read", String(ids[i]));
         markProcess.command = commandLine;
         markProcess.running = true;
     }

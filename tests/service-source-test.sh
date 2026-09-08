@@ -34,22 +34,20 @@ assert_not_contains $'if (value === "" || loading || fetchProcess.running || mar
 assert_contains 'String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"' \
   "an unrecognised open-links value does not fall back to the web app window"
 
-assert_contains $'function canonicalNotificationTimestamp(value) {\n        var text = String(value || "");\n        if (!/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$/.test(text))\n            return "";' \
-  "notification boundaries are not shape validated"
-assert_contains 'return milliseconds <= Date.now() ? text : "";' \
-  "future notification boundaries are accepted"
 assert_contains $'function prepareMarkAllNotificationsRead() {\n        if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)\n            return "";' \
   "bulk confirmation can be prepared during refresh or marking"
 assert_contains $'if (!/^\\d+$/.test(id)) {\n                notificationActionStatus = "Refresh before marking everything read.";' \
-  "bulk confirmation accepts invalid boundary notification IDs"
-assert_contains 'return JSON.stringify({boundary: boundary, boundaryIds: boundaryIds, revision: notificationsRevision});' \
-  "bulk confirmation does not capture its boundary IDs and revision"
+  "bulk confirmation accepts invalid notification IDs"
+assert_contains 'return JSON.stringify({ids: ids, revision: notificationsRevision});' \
+  "bulk confirmation does not capture its displayed notification IDs and revision"
 assert_contains $'function markAllNotificationsRead(prepared) {\n        var confirmed = String(prepared || "");\n        if (confirmed === "" || loading || fetchProcess.running || markProcess.running)\n            return ;' \
   "bulk marking is not blocked during refresh"
 assert_contains $'if (confirmed !== prepareMarkAllNotificationsRead()) {\n            notificationActionStatus = "Notifications changed. Confirm again.";' \
   "bulk marking does not verify the confirmed snapshot"
-assert_contains $'var commandLine = [helperPath(), "--mark-all-read-before", String(snapshot.boundary || "")];\n        for (var i = 0; i < snapshot.boundaryIds.length; i++)\n            commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[i]));' \
-  "bulk marking does not protect same-second arrivals"
+assert_contains $'var commandLine = [helperPath()];\n        for (var i = 0; i < ids.length; i++)\n            commandLine.push("--mark-notification-read", String(ids[i]));' \
+  "bulk marking does not patch only the confirmed notification IDs"
+assert_not_contains '--mark-all-read-before' \
+  "bulk marking still uses last_read_at"
 assert_contains $'function hideAllNotifications() {\n        var ids = [];\n        var hidden = copyMap(hiddenNotifications);\n        var remaining = [];\n        for (var i = 0; i < notifications.length; i++) {' \
   "bulk marking does not batch its optimistic removal"
 assert_contains $'hiddenNotifications = hidden;\n            notifications = remaining;\n            notificationsRevision++;' \

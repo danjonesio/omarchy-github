@@ -4,6 +4,8 @@ Your GitHub work, directly in the Omarchy bar.
 
 **Omarchy GitHub** turns the Octocat in your bar into a fast, keyboard-friendly command center for everything that needs your attention—without keeping another browser tab open.
 
+This is a fork of [robzolkos/omarchy-github](https://github.com/robzolkos/omarchy-github). It keeps the original dashboard and adds stricter URL handling, repository-name validation, and mark-as-read that only PATCHes the notification IDs the panel confirmed.
+
 ![Omarchy GitHub dashboard showing notifications, review requests, and assigned issues](preview.png)
 
 ## Everything waiting for you, in one panel
@@ -26,7 +28,7 @@ Repository search, metric filters, and sorting make even large GitHub accounts m
 - Compact previews that keep busy accounts readable
 - Direct links to notifications, pull requests, issues, workflow runs, and repositories
 - One-click notification mark-as-read, confirmed by GitHub before removal
-- Bulk mark-as-read behind a confirmation step, bounded to the threads on screen
+- Bulk mark-as-read behind a confirmation step, PATCHing only the confirmed thread IDs
 - Complete paginated repository and notification fetching
 - Configurable Actions scanning with bounded concurrency
 - Graceful partial results when an endpoint or repository is unavailable
@@ -48,38 +50,51 @@ gh auth login
 gh auth status
 ```
 
-The `notifications` scope is required to read notifications and mark threads read. The `repo` scope may be required for private repositories, review requests, assigned issues, and Actions:
+The `notifications` scope is required to read notifications and mark threads read.
+
+Classic GitHub tokens have no read-only private-repository scope. `repo` can see private repositories, but it also grants write access this widget never uses. Prefer a **read-only fine-grained personal access token** with:
+
+- Notifications: read and write (needed to mark threads read)
+- Metadata, Issues, Pull requests, and Actions: read
+
+Public-only accounts can skip `repo` entirely:
+
+```bash
+gh auth refresh -h github.com -s notifications
+```
+
+If you already use a classic token and need private metadata, `repo` is the GitHub limitation, not extra privilege this plugin asks for:
 
 ```bash
 gh auth refresh -h github.com -s notifications -s repo
 ```
 
-Omarchy GitHub delegates authentication entirely to `gh`. It does not read, copy, log, or persist your GitHub token.
+Omarchy GitHub delegates authentication entirely to `gh`. It does not read, copy, log, or persist your GitHub token. Opened links are restricted to `https://github.com/` and `https://gist.github.com/`.
 
 ## Install
 
 Install directly from GitHub and enable the widget:
 
 ```bash
-omarchy plugin add https://github.com/robzolkos/omarchy-github.git --enable
+omarchy plugin add https://github.com/danjonesio/omarchy-github.git --enable
 ```
 
 The widget defaults to the right side of the bar. To choose its position interactively:
 
 ```bash
-omarchy bar move robzolkos.github
+omarchy bar move io.github.danjonesio.github
 ```
 
 Confirm the installation:
 
 ```bash
-omarchy plugin list | grep robzolkos.github
+omarchy plugin list | grep io.github.danjonesio.github
 ```
 
 ### Update
 
 ```bash
-omarchy plugin update robzolkos.github
+omarchy plugin update io.github.danjonesio.github
 ```
 
 If your Omarchy version only supports updating all third-party plugins:
@@ -91,7 +106,7 @@ omarchy plugin update
 ### Remove
 
 ```bash
-omarchy plugin remove robzolkos.github
+omarchy plugin remove io.github.danjonesio.github
 ```
 
 ## Controls
@@ -117,7 +132,7 @@ Rows open through `omarchy-launch-webapp` by default, so GitHub gets a dedicated
 
 Activity sections show five items initially and expand to a bounded list of 25. **Open in GitHub** takes you to the corresponding complete GitHub view where one is available.
 
-The notifications footer also carries **Mark all read**. The first click captures the displayed notification snapshot and changes the label to **Confirm?**; only the second click sends the request. The confirmation lapses after a few seconds, when the panel closes, when a refresh changes the notification list, and whenever another mark is running. Notifications before the newest displayed second are handled in bulk, while displayed threads from that boundary second are marked by ID so same-second arrivals stay unread. The dashboard refreshes from GitHub after every attempt; large inboxes processed asynchronously may briefly retain threads that are already on their way out.
+The notifications footer also carries **Mark all read**. The first click captures the displayed notification IDs and changes the label to **Confirm?**; only the second click sends the request. Each confirmed thread is marked with `PATCH /notifications/threads/:id`. Threads that never appeared in the panel are left unread. The confirmation lapses after a few seconds, when the panel closes, when a refresh changes the notification list, and whenever another mark is running. The dashboard refreshes from GitHub after every attempt; large inboxes processed asynchronously may briefly retain threads that are already on their way out.
 
 ## Repository dashboard
 
@@ -161,15 +176,15 @@ Configure the widget through Omarchy's bar widget settings. Existing installatio
 Set these options from the command line after installing the plugin:
 
 ```bash
-omarchy bar set robzolkos.github repositoryScope "Owned and organizations"
-omarchy bar set robzolkos.github actionScanBehavior "Recent repositories"
+omarchy bar set io.github.danjonesio.github repositoryScope "Owned and organizations"
+omarchy bar set io.github.danjonesio.github actionScanBehavior "Recent repositories"
 ```
 
 Restore the narrowest behavior with:
 
 ```bash
-omarchy bar set robzolkos.github repositoryScope "Owned"
-omarchy bar set robzolkos.github actionScanBehavior "Off"
+omarchy bar set io.github.danjonesio.github repositoryScope "Owned"
+omarchy bar set io.github.danjonesio.github actionScanBehavior "Off"
 ```
 
 Review requests and assigned issues from archived repositories are hidden by default because archived repositories are read-only. Review requests on draft pull requests are also hidden by default, while teams that use drafts for early feedback can include them. Each behavior has its own setting.

@@ -12,14 +12,8 @@ if "$HELPER" --action-scan invalid >/dev/null 2>&1; then fail "invalid scan mode
 if "$HELPER" --repository-scope invalid >/dev/null 2>&1; then fail "invalid repository scope succeeded"; fi
 if "$HELPER" --failed-days 0 >/dev/null 2>&1; then fail "invalid failed window succeeded"; fi
 if "$HELPER" --mark-notification-read nope >/dev/null 2>&1; then fail "invalid notification id succeeded"; fi
-if "$HELPER" --mark-all-read-before nope >/dev/null 2>&1; then fail "invalid last-read timestamp succeeded"; fi
-if "$HELPER" --mark-all-read-before 2026-01-03 >/dev/null 2>&1; then fail "date without time succeeded"; fi
-if "$HELPER" --mark-all-read-before 2026-02-30T00:00:00Z --mark-boundary-notification 123 >/dev/null 2>&1; then fail "invalid calendar timestamp succeeded"; fi
-if "$HELPER" --mark-all-read-before 9999-01-01T00:00:00Z --mark-boundary-notification 123 >/dev/null 2>&1; then fail "future timestamp succeeded"; fi
-near_future=$(jq -nr 'now + 60 | todateiso8601')
-if "$HELPER" --mark-all-read-before "$near_future" --mark-boundary-notification 123 >/dev/null 2>&1; then fail "near-future timestamp succeeded"; fi
-if "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z >/dev/null 2>&1; then fail "bulk mark without a boundary notification succeeded"; fi
-if "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z --mark-boundary-notification nope >/dev/null 2>&1; then fail "invalid boundary notification id succeeded"; fi
+if "$HELPER" --mark-notification-read 123 --mark-notification-read nope >/dev/null 2>&1; then fail "invalid bulk notification id succeeded"; fi
+if "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z >/dev/null 2>&1; then fail "legacy last_read_at option succeeded"; fi
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT
@@ -51,9 +45,7 @@ if [[ $1 == api && $2 == --method && $3 == PATCH ]]; then
 fi
 if [[ $1 == api && $2 == --method && $3 == PUT ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
-  [[ $4 == /notifications ]] || exit 9
-  [[ $5 == -f && $6 == last_read_at=2020-01-02T23:59:59Z ]] || { echo "unexpected last_read_at: ${6-}" >&2; exit 9; }
-  printf '%s\n' '{}'; exit 0
+  exit 9
 fi
 if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
@@ -169,29 +161,29 @@ if grep -q 'ownerAffiliations:OWNER,' "$GH_TEST_LOG"; then fail "owned affiliati
 mark=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123)
 assert_jq '.state == "ready" and .notificationId == "123"' "$mark" "mark notification read"
 : >"$GH_TEST_LOG"
-mark_all=$(PATH="$sandbox:$PATH" "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z --mark-boundary-notification 123 --mark-boundary-notification 124)
-assert_jq '.state == "ready" and .lastReadAt == "2020-01-03T00:00:00Z"' "$mark_all" "mark all notifications read"
+mark_all=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123 --mark-notification-read 124)
+assert_jq '.state == "ready" and .count == 2' "$mark_all" "mark all notifications read"
 mapfile -t mark_calls <"$GH_TEST_LOG"
-[[ ${#mark_calls[@]} -eq 3 ]] || fail "bulk mark made an unexpected number of API calls"
-[[ ${mark_calls[0]} == 'api --method PUT /notifications -f last_read_at=2020-01-02T23:59:59Z' ]] || fail "bulk mark did not stop before the boundary second"
-[[ ${mark_calls[1]} == 'api --method PATCH /notifications/threads/123' && ${mark_calls[2]} == 'api --method PATCH /notifications/threads/124' ]] || fail "bulk mark did not patch exactly the confirmed boundary notifications"
+[[ ${#mark_calls[@]} -eq 2 ]] || fail "bulk mark made an unexpected number of API calls"
+[[ ${mark_calls[0]} == 'api --method PATCH /notifications/threads/123' && ${mark_calls[1]} == 'api --method PATCH /notifications/threads/124' ]] || fail "bulk mark did not patch exactly the confirmed notification ids"
+if grep -q ' --method PUT ' "$GH_TEST_LOG"; then fail "bulk mark used last_read_at PUT"; fi
 : >"$GH_TEST_LOG"
 set +e
-mark_partial=$(GH_FAIL_PATCH_ID=124 PATH="$sandbox:$PATH" "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z --mark-boundary-notification 123 --mark-boundary-notification 124 --mark-boundary-notification 125)
+mark_partial=$(GH_FAIL_PATCH_ID=124 PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123 --mark-notification-read 124 --mark-notification-read 125)
 mark_partial_status=$?
 set -e
-[[ $mark_partial_status -eq 1 ]] || fail "partial boundary failure returned status $mark_partial_status"
-assert_jq '.state == "error" and .notificationId == "124" and (.message|test("boundary patch rejected")) and (.message|contains("ghp_")|not) and (.message|contains("[REDACTED]"))' "$mark_partial" "partial boundary failure reports the failing notification without exposing credentials"
+[[ $mark_partial_status -eq 1 ]] || fail "partial bulk failure returned status $mark_partial_status"
+assert_jq '.state == "error" and .notificationId == "124" and (.message|test("boundary patch rejected")) and (.message|contains("ghp_")|not) and (.message|contains("[REDACTED]"))' "$mark_partial" "partial bulk failure reports the failing notification without exposing credentials"
 mapfile -t partial_calls <"$GH_TEST_LOG"
-[[ ${#partial_calls[@]} -eq 3 && ${partial_calls[0]} == 'api --method PUT /notifications -f last_read_at=2020-01-02T23:59:59Z' && ${partial_calls[1]} == 'api --method PATCH /notifications/threads/123' && ${partial_calls[2]} == 'api --method PATCH /notifications/threads/124' ]] || fail "partial boundary failure did not stop at the failing notification"
+[[ ${#partial_calls[@]} -eq 2 && ${partial_calls[0]} == 'api --method PATCH /notifications/threads/123' && ${partial_calls[1]} == 'api --method PATCH /notifications/threads/124' ]] || fail "partial bulk failure did not stop at the failing notification"
 # A rejected request must surface as an error payload rather than an empty
 # response, which is what a missing notifications scope looks like in practice.
 set +e
-mark_all_failed=$(PATH="$sandbox:$PATH" "$HELPER" --mark-all-read-before 2020-01-01T00:00:00Z --mark-boundary-notification 123)
+mark_all_failed=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 999)
 mark_all_failed_status=$?
 set -e
 [[ $mark_all_failed_status -eq 1 ]] || fail "failed bulk mark returned status $mark_all_failed_status"
-assert_jq '.state == "error" and .lastReadAt == "2020-01-01T00:00:00Z"' "$mark_all_failed" "failed mark all reports an error"
+assert_jq '.state == "error" and .notificationId == "999"' "$mark_all_failed" "failed mark reports an error"
 
 mkdir "$sandbox/failbin"
 cat >"$sandbox/failbin/mktemp" <<'SH'
@@ -202,14 +194,14 @@ chmod +x "$sandbox/failbin/mktemp"
 set +e
 mark_setup_failed=$(PATH="$sandbox/failbin:$sandbox:$PATH" "$HELPER" --mark-notification-read 123)
 mark_setup_status=$?
-bulk_setup_failed=$(PATH="$sandbox/failbin:$sandbox:$PATH" "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z --mark-boundary-notification 123)
+bulk_setup_failed=$(PATH="$sandbox/failbin:$sandbox:$PATH" "$HELPER" --mark-notification-read 123 --mark-notification-read 124)
 bulk_setup_status=$?
 fetch_setup_failed=$(PATH="$sandbox/failbin:$sandbox:$PATH" "$HELPER")
 fetch_setup_status=$?
 set -e
 [[ $mark_setup_status -eq 1 && $bulk_setup_status -eq 1 && $fetch_setup_status -eq 1 ]] || fail "temporary-storage failures returned an unexpected status"
 assert_jq '.state == "error" and .notificationId == "123"' "$mark_setup_failed" "single mark setup failure reports an error"
-assert_jq '.state == "error" and .lastReadAt == "2020-01-03T00:00:00Z"' "$bulk_setup_failed" "bulk mark setup failure reports an error"
+assert_jq '.state == "error" and .notificationId == "123"' "$bulk_setup_failed" "bulk mark setup failure reports an error"
 assert_jq '.state == "error"' "$fetch_setup_failed" "refresh setup failure reports an error"
 
 # The Actions scan runs in xargs subshells, which only see exported functions.
@@ -234,5 +226,52 @@ GH
 chmod +x "$sandbox/gh"
 scoped=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all)
 assert_jq '(.warnings|length) > 0 and (.warnings[0]|test("403"))' "$scoped" "Actions warnings keep the API error text"
+
+# Hostile html_url and repository names must not reach the panel or gh api.
+cat >"$sandbox/gh" <<'GH'
+#!/usr/bin/env bash
+if [[ $1 == auth ]]; then exit 0; fi
+printf '%s\n' "$*" >>"$GH_TEST_LOG"
+if [[ $1 == api && $2 == graphql ]]; then
+  if [[ $* == *author:@me* ]]; then
+    cat <<'JSON'
+{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Ship it","url":"javascript:alert(1)","updatedAt":"2026-01-05T00:00:00Z","isDraft":false,"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}]}}}
+JSON
+    exit 0
+  fi
+  cat <<'JSON'
+{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":1,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}},{"name":"evil","nameWithOwner":"octocat/hello$(id)","url":"https://evil.example/repo","isArchived":false,"isFork":false,"stargazerCount":1,"updatedAt":"2026-01-02T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":10,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
+JSON
+  exit 0
+fi
+endpoint=${*: -1}
+if [[ $endpoint == /notifications* ]]; then
+  cat <<'JSON'
+[{"id":"123","unread":true,"reason":"mention","updated_at":"2026-01-03T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"javascript:alert(1)"},"subject":{"title":"Review this","type":"PullRequest","url":"https://api.github.com/repos/octocat/hello/pulls/7"}},{"id":"124","unread":true,"reason":"subscribed","updated_at":"2026-01-02T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"https://github.com.evil.com/octocat/hello"},"subject":{"title":"Unknown","type":"RepositoryVulnerabilityAlert","url":"https://evil.example/x"}}]
+JSON
+  exit 0
+fi
+if [[ $endpoint == /search/issues* ]]; then
+  cat <<'JSON'
+{"items":[{"id":71,"number":7,"title":"Please review","repository_url":"https://api.github.com/repos/octocat/hello","html_url":"https://evil.example/pull/7","updated_at":"2026-01-02T00:00:00Z","user":{"login":"friend"}}]}
+JSON
+  exit 0
+fi
+if [[ $endpoint == /repos/* ]]; then
+  printf '%s\n' '{"workflow_runs":[]}'
+  exit 0
+fi
+printf '%s\n' '[]'
+GH
+chmod +x "$sandbox/gh"
+: >"$GH_TEST_LOG"
+sanitized=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all)
+assert_jq '([.notifications[].url]|index("javascript:alert(1)")|not) and ([.notifications[].url]|index("https://github.com.evil.com/octocat/hello")|not)' "$sanitized" "hostile notification urls are dropped"
+assert_jq '.notifications[0].url == "https://github.com/octocat/hello/pull/7" and .notifications[1].url == "https://github.com/octocat/hello"' "$sanitized" "notification urls fall back to github.com"
+assert_jq '([.reviewRequests[].url]|index("https://evil.example/pull/7")|not) and (.reviewRequests[0].url == "")' "$sanitized" "hostile search urls are dropped"
+assert_jq '.myPullRequests[0].url == ""' "$sanitized" "hostile authored pull request urls are dropped"
+assert_jq '([.repositories[].nameWithOwner]|index("octocat/hello$(id)")|not) and ([.repositories[].nameWithOwner]|index("octocat/hello") != null)' "$sanitized" "invalid repository names are dropped"
+if grep -F 'octocat/hello$(id)' "$GH_TEST_LOG"; then fail "invalid repository name reached gh api"; fi
+if grep -E '/repos/[^ ]*\$' "$GH_TEST_LOG"; then fail "shell metacharacters reached an actions path"; fi
 
 echo "helper tests passed"
