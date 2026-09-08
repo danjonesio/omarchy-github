@@ -59,7 +59,7 @@ assert_contains 'root.bar.shell.updateEntryInline(root.moduleName, entry)' \
 # inline binding the first time a row is picked.
 assert_contains $'Binding on value { value: github.linkBehavior }' \
   "the open-links dropdown does not re-assert the persisted value"
-assert_contains 'blocked: root.settingsOpen || search.activeFocus' \
+assert_contains 'blocked: root.settingsOpen' \
   "the key catcher steals keys from the settings controls"
 assert_contains 'visible: !root.settingsOpen' \
   "the dashboard stays visible behind the settings page"
@@ -96,16 +96,16 @@ assert_contains $'text: "󰅂"\n        tooltipText: "Next notifications"' \
 assert_contains $'text: (section.page + 1) + " / " + section.pageCount\n        height: previousPageButton.height\n        color: root.dim' \
   "notification page number is not vertically centered with its controls"
 
-assert_contains $'function applyPanelWheel(event) {\n    if (!panelFlick || (sortPicker && sortPicker.popupOpen)) return false' \
+assert_contains $'function applyPanelWheel(event) {\n    if (!panelFlick) return false' \
   "the panel still uses Flickable's default wheel distance"
 assert_contains $'panelFlick.contentY = Math.max(0, Math.min(maxY, panelFlick.contentY - wheel.steps * Style.space(80)))' \
   "a mouse-wheel notch does not move about one row"
 assert_contains $'ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }\n        // Must be a direct child of Flickable or Qt keeps the default\n        // 1–2px wheel distance and this handler never runs.\n        WheelHandler {\n          acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad' \
   "the wheel handler is not a direct child of the panel Flickable"
 
-assert_contains 'github.fetchedRepositoryScope === "owned" ? "OWNED REPOSITORIES  " : "REPOSITORIES  "' \
-  "the repository heading does not follow the fetched scope"
-assert_contains '"No repositories loaded."' \
-  "the repository empty state still claims a scope"
+assert_not_contains "OWNED REPOSITORIES" \
+  "the owned repositories dashboard is still in the panel"
+assert_not_contains "Filter repositories" \
+  "repository search is still in the panel"
 
 echo "panel source tests passed"

@@ -16,9 +16,6 @@ Panel {
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  property string query: ""
-  property string metricFilter: "all"
-  property string sortMode: "updated"
   property bool cursorActive: false
   property int cursorIndex: 0
   property int notificationsPage: 0
@@ -52,17 +49,6 @@ Panel {
   property real wheelAccumulator: 0
   readonly property int activityPreviewCount: 5
   readonly property int activityExpandedCount: 25
-  readonly property var metricFilters: [
-    { id: "all", label: "All" }, { id: "issues", label: "Issues" },
-    { id: "prs", label: "PRs" }, { id: "stars", label: "Stars" },
-    { id: "actions", label: "Actions" }
-  ]
-  readonly property var sortModes: [
-    { value: "updated", label: "Updated" }, { value: "name", label: "Name" },
-    { value: "stars", label: "Stars" }, { value: "issues", label: "Issues" },
-    { value: "prs", label: "PRs" }, { value: "actions", label: "Actions" }
-  ]
-  readonly property var displayedRepositories: filteredRepositories()
   readonly property var cursorTargets: buildCursorTargets()
   readonly property var selectedTarget: cursorTargets.length > 0 ? cursorTargets[Math.max(0, Math.min(cursorIndex, cursorTargets.length - 1))] : null
 
@@ -92,7 +78,6 @@ Panel {
     add("issue", sectionRows(github.assignedIssues, issuesExpanded))
     add("action", sectionRows(github.actions, actionsExpanded))
     add("failure", sectionRows(github.failedActions, failuresExpanded))
-    add("repository", displayedRepositories)
     return targets
   }
 
@@ -126,7 +111,7 @@ Panel {
     if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))
   }
   function applyPanelWheel(event) {
-    if (!panelFlick || (sortPicker && sortPicker.popupOpen)) return false
+    if (!panelFlick) return false
     var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
     if (maxY <= 0) return false
     var pixel = event.pixelDelta.y
@@ -217,31 +202,7 @@ Panel {
     linkBehaviorDropdown.close()
     repositoryScopeDropdown.close()
     refreshIntervalDropdown.close()
-    if (sortPicker) sortPicker.close()
     pageFlip.restart()
-  }
-
-  function filteredRepositories() {
-    var needle = String(query || "").trim().toLowerCase()
-    var rows = []
-    for (var i = 0; i < github.repositories.length; i++) {
-      var repo = github.repositories[i]
-      if (needle !== "" && String(repo.nameWithOwner || repo.name || "").toLowerCase().indexOf(needle) === -1) continue
-      if (metricFilter === "issues" && Number(repo.issues || 0) <= 0) continue
-      if (metricFilter === "prs" && Number(repo.prs || 0) <= 0) continue
-      if (metricFilter === "stars" && Number(repo.stars || 0) <= 0) continue
-      if (metricFilter === "actions" && Number(repo.activeActions || 0) <= 0) continue
-      rows.push(repo)
-    }
-    rows.sort(function(a, b) {
-      if (sortMode === "name") return String(a.nameWithOwner).localeCompare(String(b.nameWithOwner))
-      if (sortMode === "updated") return String(b.updatedAt).localeCompare(String(a.updatedAt))
-      var av = Number(a[sortMode] || (sortMode === "actions" ? a.activeActions : 0) || 0)
-      var bv = Number(b[sortMode] || (sortMode === "actions" ? b.activeActions : 0) || 0)
-      if (av !== bv) return bv - av
-      return String(a.nameWithOwner).localeCompare(String(b.nameWithOwner))
-    })
-    return rows.slice(0, Math.max(10, Number(setting("maxDisplayedRepos", 25))))
   }
 
   function relativeTime(value) {
@@ -354,21 +315,16 @@ Panel {
       anchors.fill: parent
       // Settings controls own their native focus chain and keys. The settings
       // page carries its own Escape handler to return to the dashboard.
-      blocked: root.settingsOpen || search.activeFocus || sortPicker.popupOpen
+      blocked: root.settingsOpen
       onMoveRequested: function(dx, dy) { if (root.settingsOpen) return; if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: if (!root.settingsOpen) root.activateCursor()
       onCloseRequested: if (root.settingsOpen) root.showSettings(false); else root.close()
-      // Tab enters the native control chain so search, filters, sorting, and
-      // section controls remain keyboard-accessible.
       onTabRequested: function(direction) {
         if (root.settingsOpen) return
-        if (direction < 0) sortPicker.forceActiveFocus()
-        else search.forceActiveFocus()
       }
       onTextKey: function(text) {
         if (root.settingsOpen) return
         if (text === "r" || text === "R") github.refresh()
-        else if (text === "/") Qt.callLater(function() { search.forceActiveFocus() })
         else if (text === "m" || text === "M") root.markSelectedRead()
       }
 
@@ -586,105 +542,6 @@ Panel {
             delegateComponent: failedActionDelegate
           }
 
-          PanelSeparator { foreground: root.foreground }
-
-          PanelSectionHeader {
-            width: parent.width
-            // Driven by the fetched scope, not the setting, so it cannot claim
-            // to list organization repositories before a refresh brings them in.
-            text: (github.fetchedRepositoryScope === "owned" ? "OWNED REPOSITORIES  " : "REPOSITORIES  ") + root.displayedRepositories.length + "/" + github.repositories.length
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-          }
-
-          TextField {
-            id: search
-            width: parent.width
-            foreground: root.foreground
-            placeholderText: "Filter repositories  /"
-            text: root.query
-            onTextChanged: root.query = text
-            Keys.onEscapePressed: function(event) {
-              root.query = ""
-              keyCatcher.forceActiveFocus()
-              event.accepted = true
-            }
-          }
-
-          Flickable {
-            width: parent.width
-            height: filterRow.implicitHeight
-            contentWidth: filterRow.implicitWidth
-            contentHeight: height
-            clip: true
-            flickableDirection: Flickable.HorizontalFlick
-            interactive: contentWidth > width
-            Row {
-              id: filterRow
-              spacing: Style.space(6)
-              Repeater {
-                model: root.metricFilters
-                Button {
-                  required property var modelData
-                  text: modelData.label
-                  selected: root.metricFilter === modelData.id
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  verticalPadding: Style.spacing.controlPaddingY
-                  onClicked: root.metricFilter = modelData.id
-                }
-              }
-            }
-          }
-
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-            Text {
-              text: "Sort"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            Dropdown {
-              id: sortPicker
-              Layout.fillWidth: true
-              Binding on value { value: root.sortMode }
-              options: root.sortModes
-              showLabel: false
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onChanged: function(v) { root.sortMode = v }
-            }
-          }
-
-          Text {
-            visible: root.displayedRepositories.length === 0
-            width: parent.width
-            text: github.repositories.length === 0 ? "No repositories loaded." : "No repositories match these filters."
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            horizontalAlignment: Text.AlignHCenter
-          }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(4)
-            Repeater {
-              model: root.displayedRepositories
-              RepoRow {
-                required property var modelData
-                required property int index
-                width: parent.width
-                repo: modelData
-                rowIndex: index
-              }
-            }
-          }
-
           Text {
             visible: github.rateLimit && github.rateLimit.remaining !== undefined
             width: parent.width
@@ -875,7 +732,7 @@ Panel {
             Toggle {
               width: parent.width
               label: "Include archived repositories"
-              description: "Show repositories that have been archived on GitHub."
+              description: "Include archived repositories when scanning Actions."
               checked: root.setting("includeArchived", false) === true
               foreground: root.foreground
               accent: Color.accent
@@ -886,7 +743,7 @@ Panel {
             Toggle {
               width: parent.width
               label: "Include forked repositories"
-              description: "Show repositories you forked from someone else."
+              description: "Include forks when scanning Actions."
               checked: root.setting("includeForks", false) === true
               foreground: root.foreground
               accent: Color.accent
@@ -896,7 +753,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "The remaining options — Actions scanning, review request filters, and display limits — stay in Omarchy's bar widget settings."
+              text: "The remaining options — Actions scanning and review request filters — stay in Omarchy's bar widget settings."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1303,63 +1160,6 @@ Panel {
         fontFamily: root.fontFamily
         bordered: false
         onClicked: github.markNotificationRead(linkRow.notificationId)
-      }
-    }
-  }
-
-  component RepoRow: CursorSurface {
-    id: repoRow
-    property var repo: null
-    property int rowIndex: 0
-    readonly property string cursorKey: root.targetKey("repository", repo, rowIndex)
-    hasCursor: root.cursorActive && root.selectedKey() === cursorKey
-    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(repoRow)
-    foreground: root.foreground
-    implicitHeight: repoLayout.implicitHeight + Style.space(16)
-
-    MouseArea {
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onEntered: root.selectKey(repoRow.cursorKey)
-      onClicked: if (repoRow.repo) root.openUrl(repoRow.repo.url)
-    }
-    RowLayout {
-      id: repoLayout
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      anchors.leftMargin: Style.space(9)
-      anchors.rightMargin: Style.space(9)
-      spacing: Style.space(8)
-      ColumnLayout {
-        Layout.fillWidth: true
-        spacing: Style.space(2)
-        Text {
-          Layout.fillWidth: true
-          text: repoRow.repo ? repoRow.repo.nameWithOwner : ""
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          elide: Text.ElideRight
-        }
-        Text {
-          Layout.fillWidth: true
-          text: {
-            if (!repoRow.repo) return ""
-            var parts = ["Issues " + Number(repoRow.repo.issues || 0),
-                         "PRs " + Number(repoRow.repo.prs || 0),
-                         "Stars " + Number(repoRow.repo.stars || 0)]
-            if (Number(repoRow.repo.activeActions || 0) > 0)
-              parts.push("Actions " + Number(repoRow.repo.activeActions))
-            parts.push("updated " + root.relativeTime(repoRow.repo.updatedAt))
-            return parts.join("  ·  ")
-          }
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-        }
       }
     }
   }

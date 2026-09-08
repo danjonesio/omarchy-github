@@ -18,18 +18,15 @@ The dashboard is ordered by urgency so the most actionable work appears first:
 - **Assigned issues** — keep track of open issues assigned to you
 - **Active GitHub Actions** — monitor queued, pending, requested, waiting, and running workflows
 - **Recent workflow failures** — jump directly to failed, timed-out, or action-required runs
-- **Repositories** — browse the repositories you own, and optionally those you reach through an organization, with open issue, open PR, star, and active workflow counts
-
-Repository search, metric filters, and sorting make even large GitHub accounts manageable. Filter to repositories with issues, PRs, stars, or active Actions, then sort by the metric that matters.
 
 ## Highlights
 
 - Native Omarchy Quattro bar widget with an Octocat icon
 - Compact previews that keep busy accounts readable
-- Direct links to notifications, pull requests, issues, workflow runs, and repositories
+- Direct links to notifications, pull requests, issues, and workflow runs
 - One-click notification mark-as-read, confirmed by GitHub before removal
 - Bulk mark-as-read behind a confirmation step, PATCHing only the confirmed thread IDs
-- Complete paginated repository and notification fetching
+- Complete paginated notification fetching
 - Configurable Actions scanning with bounded concurrency
 - Graceful partial results when an endpoint or repository is unavailable
 - Explicit logged-out, rate-limited, missing CLI, loading, and error states
@@ -132,28 +129,14 @@ omarchy plugin remove io.github.danjonesio.github
 | `j` / `k` or arrow keys | Move through visible rows |
 | `Enter` / `Space` | Open the highlighted row |
 | `m` | Mark the highlighted notification read |
-| `/` | Focus repository search |
 | `r` | Refresh |
-| `Escape` in search | Clear search and return to row navigation |
-| `Escape` elsewhere | Close the panel |
+| `Escape` | Close the panel |
 
 Rows open through `omarchy-launch-webapp` by default, so GitHub gets a dedicated app window rather than a tab in an already-crowded browser. That helper targets Chromium-based default browsers and falls back to `chromium.desktop`; if you have no Chromium-based browser, switch **Open links** to **Browser tab** and rows open through `xdg-open` using your default URL handler instead. This also lets a workspace-aware browser launcher choose the destination without a separate focus command switching workspaces first.
 
 Activity sections show five items initially and expand to a bounded list of 25. **Open in GitHub** takes you to the corresponding complete GitHub view where one is available.
 
 The notifications footer also carries **Mark all read**. The first click captures the displayed notification IDs and changes the label to **Confirm?**; only the second click sends the request. Each confirmed thread is marked with `PATCH /notifications/threads/:id`. Threads that never appeared in the panel are left unread. The confirmation lapses after a few seconds, when the panel closes, when a refresh changes the notification list, and whenever another mark is running. The dashboard refreshes from GitHub after every attempt; large inboxes processed asynchronously may briefly retain threads that are already on their way out.
-
-## Repository dashboard
-
-Every listed repository includes:
-
-- Open issue count
-- Open pull request count
-- Star count
-- Active Actions count, when present
-- Last-updated time
-
-Use the filter chips to show all repositories or only repositories with a non-zero issue, PR, star, or active Actions count. Sort by update time, name, or any metric. Search always runs against the complete fetched repository list, even when rendered rows are capped.
 
 ## Settings
 
@@ -170,7 +153,6 @@ Configure the widget through Omarchy's bar widget settings. Existing installatio
 | Repository scope | **Owned** |
 | Include review requests and issues from archived repositories | Off |
 | Include review requests on drafts | Off |
-| Maximum displayed repositories | 25 |
 | Actions scan | **Recent repositories** |
 | Recent repository scan limit | 15 |
 | Actions request concurrency | 6 |
@@ -178,7 +160,7 @@ Configure the widget through Omarchy's bar widget settings. Existing installatio
 | Maximum failed Actions | 20 |
 | Keep the bar icon unlit | Off |
 
-**Repository scope** controls both the repository dashboard and the candidate repositories for Actions scanning. **Owned and organizations** is opt-in. With the default **Recent repositories** scan, Actions requests remain capped to the 15 most recently updated repositories in that wider scope.
+**Repository scope** controls which repositories are candidates for Actions scanning. **Owned and organizations** is opt-in. With the default **Recent repositories** scan, Actions requests remain capped to the 15 most recently updated repositories in that wider scope.
 
 **All repositories** is also opt-in and starts six paginated Actions request streams per repository on every refresh. Combining it with **Owned and organizations** can consume substantial GitHub API capacity in large organizations. Use **Recent repositories** or **Off** for a bounded scan, and increase the refresh interval when broader monitoring is required.
 
@@ -221,7 +203,7 @@ The shell watches local plugin files, making QML iteration fast.
 
 `Service.qml` schedules an executable helper, `omarchy-github-fetch`, which calls GitHub exclusively through `gh api` and processes responses with `jq`.
 
-- GraphQL retrieves every repository in the configured scope and exact aggregate counts.
+- GraphQL retrieves repositories in the configured scope as candidates for Actions scanning.
 - REST retrieves notifications and workflow runs.
 - GitHub issue search retrieves review requests and assigned issues.
 - GraphQL search retrieves your authored pull requests together with the head commit's `statusCheckRollup`, so check state costs no extra request.
