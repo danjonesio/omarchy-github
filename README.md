@@ -124,6 +124,8 @@ omarchy plugin remove io.github.danjonesio.github
 | Click a row | Open it on GitHub; notification rows are also marked read |
 | Gear button in the panel header | Open the settings page |
 | Check button on a notification | Mark the thread read immediately, then confirm with GitHub |
+| Archive button on a notification | Mark the thread **Done** |
+| `d` | Mark the highlighted notification done |
 | **Mark all read** in the notifications footer | Arm the bulk mark-as-read |
 | **Confirm?** on the armed button | Mark every notification on screen read |
 | `j` / `k` or arrow keys | Move through visible rows |
@@ -140,7 +142,7 @@ The notifications footer also carries **Mark all read**. The first click capture
 
 ## Settings
 
-The everyday options — **Open links**, **Repository scope**, **Refresh interval**, and the archived, forked, and unlit-icon toggles — are also editable in the panel itself through the gear button in the header. Changes are written to the widget's entry in `shell.json` and apply immediately. The remaining options stay in Omarchy's bar widget settings.
+**Open links** and **Refresh interval** are editable in the panel through the gear button. Changes are written to the widget's entry in `shell.json` and apply immediately. Actions scanning and review filters stay in Omarchy's bar widget settings. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old.
 
 Configure the widget through Omarchy's bar widget settings. Existing installations retain the narrower repository scope and bounded Actions scan:
 

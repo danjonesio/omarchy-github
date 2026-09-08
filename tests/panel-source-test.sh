@@ -38,8 +38,10 @@ assert_contains $'function activateCursor() {\n    if (!selectedTarget) return\n
   "opening a notification from the keyboard does not mark it read"
 assert_contains $'function openRow(kind, id, url) {\n    var target = String(url || "")\n    var notificationId = String(id || "")\n    openUrl(target)\n    if (kind === "notification") github.markNotificationRead(notificationId)' \
   "opening a notification marks it before launching the URL"
-assert_contains $'function markSelectedRead() {\n    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))' \
+assert_contains $'function markSelectedRead() {\n    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row["id"] || selectedTarget.row.id || ""))' \
   "keyboard notification marking is blocked during refresh"
+assert_contains $'function markSelectedDone() {\n    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationDone(String(selectedTarget.row["id"] || selectedTarget.row.id || ""))' \
+  "keyboard Done is missing"
 assert_contains $'onClicked: root.openRow(linkRow.rowKind, linkRow.notificationId || linkRow.rowId, linkRow.url)' \
   "clicking a notification does not open and mark it read"
 assert_contains $'function allowedGithubUrl(url) {\n    var value = String(url || "").trim()\n    if (value === "") return ""\n    if (!/^https:\\/\\/(gist\\.)?github\\.com(\\/|$)/i.test(value)) return ""' \
@@ -67,13 +69,15 @@ assert_contains 'visible: root.settingsOpen' \
   "the settings page is always visible"
 assert_contains $'pageFlip.stop()\n      settingsOpen = false' \
   "closing the panel leaves it on the settings page"
-assert_contains $'id: readActionStrip\n      visible: linkRow.showReadAction\n      anchors.right: parent.right\n      anchors.top: parent.top\n      anchors.bottom: parent.bottom\n      width: Style.space(32)' \
+assert_contains $'id: notificationActions\n      visible: linkRow.showReadAction\n      anchors.right: parent.right\n      anchors.top: parent.top\n      anchors.bottom: parent.bottom\n      width: Style.space(linkRow.showDoneAction ? 64 : 32)' \
   "notification read target does not fill the row height at its right edge"
-assert_contains $'anchors.right: readActionStrip.visible ? readActionStrip.left : parent.right\n      anchors.verticalCenter: parent.verticalCenter\n      anchors.leftMargin: Style.space(9)\n      anchors.rightMargin: readActionStrip.visible ? 0 : Style.space(9)' \
+assert_contains $'anchors.right: notificationActions.visible ? notificationActions.left : parent.right\n      anchors.verticalCenter: parent.verticalCenter\n      anchors.leftMargin: Style.space(9)\n      anchors.rightMargin: notificationActions.visible ? 0 : Style.space(9)' \
   "notification content does not meet the full-height read target"
+assert_contains 'tooltipText: "Done (D)"' \
+  "notification rows have no Done action"
 assert_contains $'borderSpec: Border.none()\n\n      HoverHandler {\n        onHoveredChanged: if (hovered) root.selectKey(linkRow.cursorKey)\n      }\n\n      Rectangle {\n        anchors.left: parent.left\n        anchors.top: parent.top\n        anchors.bottom: parent.bottom' \
   "notification read target does not use a left-only divider"
-assert_contains $'anchors.fill: parent\n        enabled: github.markingNotificationId !== linkRow.notificationId' \
+assert_contains $'enabled: github.markingNotificationId !== linkRow.notificationId\n          iconText: github.markingNotificationId === linkRow.notificationId && github.markingMode !== "done" ? "󰑐" : "󰄬"' \
   "notification read target does not fill its action strip"
 assert_contains $'function notificationRows() {\n    var page = Math.max(0, Math.min(notificationsPage, notificationPageCount() - 1))' \
   "notifications are not paged in five-item windows"
@@ -81,7 +85,7 @@ assert_contains $'onPreviousPage: root.notificationsPage = Math.max(0, root.noti
   "notification page controls do not clamp their range"
 assert_contains $'model: root.notificationRows()\n            showExpansionControl: false\n            footerButtonsBordered: true\n            page: root.notificationsPage' \
   "notification pagination still shows an inactive expansion control"
-assert_contains $'showReadAction: true\n      showTrailingIndicator: false\n      notificationId: String(modelData.id || "")' \
+assert_contains $'showReadAction: true\n      showDoneAction: true\n      showTrailingIndicator: false\n      notificationId: String(modelData["id"] || modelData.id || "")' \
   "notification rows retain an open-link indicator beside their read action"
 assert_contains $'title: "ASSIGNED ISSUES"\n            count: github.assignedIssues.length\n            model: root.sectionRows(github.assignedIssues, root.issuesExpanded)\n            expanded: root.issuesExpanded\n            footerButtonsBordered: true\n            openUrl: "https://github.com/issues/assigned"' \
   "assigned-issues open control does not retain its matching border"

@@ -14,6 +14,9 @@ concurrency=6
 failed_days=7
 failed_limit=20
 mark_notifications=()
+mark_dones=()
+phase="all"
+cache_file=""
 
 usage() {
   cat <<'EOF'
@@ -35,6 +38,11 @@ Usage: omarchy-github-fetch [options]
   --failed-limit N              Maximum recent failed runs, 1-100 (default: 20)
   --mark-notification-read ID   Mark a notification thread read and exit
                                 (repeatable; only the given IDs are patched)
+  --mark-notification-done ID   Mark a notification thread done and exit
+                                (repeatable; DELETE, not PATCH)
+  --phase MODE                  all, inbox, or actions (default: all)
+  --cache-file PATH             Write the emitted JSON to PATH (inbox creates,
+                                actions merges into an existing file)
 EOF
 }
 
@@ -54,6 +62,9 @@ while (($#)); do
     --failed-days) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; failed_days=$2; shift 2 ;;
     --failed-limit) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; failed_limit=$2; shift 2 ;;
     --mark-notification-read) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_notifications+=("$2"); shift 2 ;;
+    --mark-notification-done) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_dones+=("$2"); shift 2 ;;
+    --phase) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; phase=${2,,}; shift 2 ;;
+    --cache-file) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; cache_file=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -65,6 +76,7 @@ integer "$failed_days" && ((failed_days >= 1 && failed_days <= 30)) || { echo "i
 integer "$failed_limit" && ((failed_limit >= 1 && failed_limit <= 100)) || { echo "invalid --failed-limit" >&2; exit 2; }
 [[ $action_scan == off || $action_scan == recent || $action_scan == all ]] || { echo "invalid --action-scan" >&2; exit 2; }
 [[ $repository_scope == owned || $repository_scope == organizations ]] || { echo "invalid --repository-scope" >&2; exit 2; }
+[[ $phase == all || $phase == inbox || $phase == actions ]] || { echo "invalid --phase" >&2; exit 2; }
 # Interpolated into the GraphQL document, so it comes from the validated enum
 # above. The argument itself never reaches the query.
 if [[ $repository_scope == organizations ]]; then owner_affiliations="[OWNER,ORGANIZATION_MEMBER]"; else owner_affiliations="OWNER"; fi
@@ -82,6 +94,15 @@ if ((${#mark_notifications[@]} > 0)); then
   for id in "${mark_notifications[@]}"; do
     [[ $id =~ ^[0-9]+$ ]] || { jq -n --arg id "$id" '{state:"error",message:"Invalid notification thread id.",notificationId:$id}'; exit 2; }
   done
+fi
+if ((${#mark_dones[@]} > 0)); then
+  for id in "${mark_dones[@]}"; do
+    [[ $id =~ ^[0-9]+$ ]] || { jq -n --arg id "$id" '{state:"error",message:"Invalid notification thread id.",notificationId:$id}'; exit 2; }
+  done
+fi
+if ((${#mark_notifications[@]} > 0 && ${#mark_dones[@]} > 0)); then
+  jq -n '{state:"error",message:"Choose read or done, not both."}'
+  exit 2
 fi
 command -v gh >/dev/null 2>&1 || { emit_state gh-not-installed "GitHub CLI is not installed or not on PATH."; exit 0; }
 gh auth status -h github.com >/dev/null 2>&1 || { emit_state logged-out "Sign in with gh auth login to load GitHub data."; exit 0; }
@@ -137,6 +158,46 @@ if ((${#mark_notifications[@]} > 0)); then
   exit 0
 fi
 
+if ((${#mark_dones[@]} > 0)); then
+  if ! mark_tmp=$(mktemp -d); then
+    jq -n --arg id "${mark_dones[0]}" '{state:"error",message:"Could not prepare the notification request.",notificationId:$id}'
+    exit 1
+  fi
+  trap 'rm -rf "$mark_tmp"' EXIT
+  done_one() {
+    local id=$1
+    if gh api --method DELETE "/notifications/threads/$id" >/dev/null 2>"$mark_tmp/$id.err"; then
+      : >"$mark_tmp/$id.ok"
+    fi
+  }
+  export mark_tmp
+  export -f done_one
+  printf '%s\n' "${mark_dones[@]}" | xargs -r -P 6 -n 1 bash -c 'done_one "$1"' _
+  failed_id=""
+  failed_message=""
+  ok=0
+  for id in "${mark_dones[@]}"; do
+    if [[ -f $mark_tmp/$id.ok ]]; then
+      ok=$((ok + 1))
+    elif [[ -z $failed_id ]]; then
+      failed_id=$id
+      failed_message=$(error_detail "$mark_tmp/$id.err")
+    fi
+  done
+  rm -rf "$mark_tmp"
+  trap - EXIT
+  if [[ -n $failed_id ]]; then
+    jq -n --arg id "$failed_id" --arg message "${failed_message:-Could not mark notification done.}" --argjson marked "$ok" '{state:"error",message:$message,notificationId:$id,marked:$marked}'
+    exit 1
+  fi
+  if ((${#mark_dones[@]} == 1)); then
+    jq -n --arg id "${mark_dones[0]}" '{state:"ready",message:"Notification marked done.",notificationId:$id}'
+  else
+    jq -n --argjson count "${#mark_dones[@]}" '{state:"ready",message:"Notifications marked done.",count:$count}'
+  fi
+  exit 0
+fi
+
 if ! tmp=$(mktemp -d); then
   emit_state error "Could not prepare temporary storage for the GitHub refresh."
   exit 1
@@ -159,9 +220,14 @@ fetch_paginated() {
   return 1
 }
 
+fetch_inbox=true
+fetch_actions=true
+[[ $phase == actions ]] && fetch_inbox=false
+[[ $phase == inbox ]] && fetch_actions=false
+
 # Urgent inbox data is fetched independently so missing permissions in one
 # section never suppress successful results in another.
-if fetch_paginated notifications '/notifications?all=false&participating=false&per_page=100' "$tmp/notifications.pages"; then
+if $fetch_inbox && fetch_paginated notifications '/notifications?all=false&participating=false&per_page=100' "$tmp/notifications.pages"; then
   # Notification subjects use API URLs whose path semantics vary by type.
   # Convert only known types and fall back to the repository for everything
   # else rather than opening an API endpoint or manufacturing a broken URL.
@@ -187,6 +253,7 @@ fetch_search() {
     jq -s "$jq_github_url"'[.[] | .items[]? | {id:(.id|tostring),number,title:(.title // ""),repository:(.repository_url // "" | sub("^https://api.github.com/repos/";"") | github_repo),url:((.html_url // "") | github_url),updatedAt:(.updated_at // ""),user:(.user.login // ""),draft:(.draft // false)}] | sort_by(.updatedAt) | reverse' "$pages" >"$output" 2>/dev/null || { printf '[]\n' >"$output"; printf '%s: invalid API response\n' "$label" >>"$warnings"; }
   else printf '[]\n' >"$output"; fi
 }
+if $fetch_inbox; then
 # An archived repository is read-only, so the request cannot be withdrawn and
 # the work cannot be done: it would otherwise be listed forever.
 if bool "$include_archived_reviews"; then search_archived=""; else search_archived="+archived%3Afalse"; fi
@@ -220,7 +287,21 @@ if my_pulls=$(gh api graphql -f query='query($search:String!) { search(query:$se
 else
   api_error my-pull-requests "$tmp/mypulls.err"
 fi
+else
+  printf '[]\n' >"$tmp/reviews.json"
+  printf '[]\n' >"$tmp/issues.json"
+  printf '[]\n' >"$tmp/mypulls.json"
+  printf '0\n' >"$tmp/mypulls-total.json"
+fi
 
+if ! $fetch_actions; then
+  [[ -n ${login:-} ]] || login=$(gh api user -q .login 2>/dev/null || true)
+  printf '[]\n' >"$tmp/repos.json"
+  printf '[]\n' >"$tmp/actions.json"
+  printf '[]\n' >"$tmp/failed.json"
+  printf 'null\n' >"$tmp/rate.json"
+  graphql_ok=true
+else
 cursor=null
 printf '[]\n' >"$tmp/repos.json"
 graphql_ok=true
@@ -268,11 +349,39 @@ if [[ $action_scan != off && $(jq 'length' "$tmp/repos.json") -gt 0 ]]; then
   jq -s 'add // []|unique_by(.id)|sort_by(.createdAt)|reverse' "$tmp"/action-*.active.json >"$tmp/actions.json" 2>/dev/null || printf '[]\n' >"$tmp/actions.json"
   jq -s --argjson cutoff "$cutoff_epoch" --argjson limit "$failed_limit" 'add // []|[.[]|select((.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="action_required" or .conclusion=="startup_failure") and ((.createdAt|fromdateiso8601) >= $cutoff))]|unique_by(.id)|sort_by(.updatedAt)|reverse|.[:$limit]' "$tmp"/action-*.completed.json >"$tmp/failed.json" 2>/dev/null || printf '[]\n' >"$tmp/failed.json"
   jq --slurpfile actions "$tmp/actions.json" 'map(. as $repo|.activeActions=([$actions[0][]|select(.repository==$repo.nameWithOwner)]|length))' "$tmp/repos.json" >"$tmp/repos.next" && mv "$tmp/repos.next" "$tmp/repos.json"
+  if [[ -s $tmp/actions.json && $(jq 'length' "$tmp/actions.json") -gt 0 ]]; then
+    jq -r '.[] | select(.status=="in_progress") | select(.id != null) | (.repository|tostring) + "\t" + (.id|tostring)' "$tmp/actions.json" | head -20 >"$tmp/job-runs"
+    : >"$tmp/jobmeta.jsonl"
+    while IFS=$'\t' read -r repo run; do
+      [[ $run =~ ^[0-9]+$ ]] || continue
+      safe_repo "$repo" || continue
+      if jobs_json=$(gh api -H 'Accept: application/vnd.github+json' "/repos/$repo/actions/runs/$run/jobs?per_page=100" 2>>"$tmp/jobs.err"); then
+        printf '%s\n' "$jobs_json" | jq -c --arg repo "$repo" --argjson run "$run" '{id:$run,repository:$repo,job:(([.jobs[]? | select(.status=="in_progress" or .status=="queued" or .status=="waiting")][0].name) // ""),step:(([.jobs[]? | select(.status=="in_progress") | (.steps // [])[] | select(.status=="in_progress")][0].name) // "")}' >>"$tmp/jobmeta.jsonl"
+      fi
+    done < "$tmp/job-runs"
+    if [[ -s $tmp/jobmeta.jsonl ]]; then
+      jq -s '.' "$tmp/jobmeta.jsonl" >"$tmp/jobmeta.json"
+      jq --slurpfile meta "$tmp/jobmeta.json" '($meta[0] // []) as $m | map(. as $a | ($m | map(select((.id|tostring) == ($a.id|tostring) and .repository == $a.repository))[0] // {}) as $hit | . + {job:($hit.job // ""), step:($hit.step // "")})' "$tmp/actions.json" >"$tmp/actions.jobs" && mv "$tmp/actions.jobs" "$tmp/actions.json"
+    else
+      jq 'map(. + {job:"", step:""})' "$tmp/actions.json" >"$tmp/actions.jobs" && mv "$tmp/actions.jobs" "$tmp/actions.json"
+    fi
+  fi
+fi
 fi
 
 warnings_json=$(sort -u "$warnings"|jq -Rsc 'split("\n")|map(select(length>0))')
 repo_count=$(jq 'length' "$tmp/repos.json")
-if [[ $graphql_ok == false && $repo_count -eq 0 ]]; then state=error; message="GitHub repositories could not be loaded."; else state=ready; message=""; fi
+if [[ $graphql_ok == false && $repo_count -eq 0 && $phase != inbox ]]; then state=error; message="GitHub repositories could not be loaded."; else state=ready; message=""; fi
 rate_remaining=$(jq -r '.remaining // 999999' "$tmp/rate.json")
 if { [[ $rate_remaining =~ ^[0-9]+$ ]] && ((rate_remaining<=0)); } || grep -qiE 'rate.?limit|secondary rate' "$warnings"; then state=rate-limited; message="GitHub API rate limit reached."; fi
-jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],warnings:$warnings,rateLimit:$rate[0]}'
+json=$(jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --arg phase "$phase" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,phase:$phase,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],warnings:$warnings,rateLimit:$rate[0]}')
+printf '%s\n' "$json"
+if [[ -n $cache_file ]]; then
+  mkdir -p "$(dirname "$cache_file")"
+  if [[ $phase == actions && -f $cache_file ]]; then
+    printf '%s\n' "$json" >"$tmp/incoming.json"
+    jq -s '.[0] as $old | .[1] as $new | $old + {actions:$new.actions, failedActions:$new.failedActions, repositories:$new.repositories, rateLimit:$new.rateLimit, warnings:((($old.warnings // []) + ($new.warnings // [])) | unique), actionsFetchedAt:$new.fetchedAt, phase:"all"}' "$cache_file" "$tmp/incoming.json" >"$cache_file.next" && mv "$cache_file.next" "$cache_file"
+  else
+    printf '%s\n' "$json" >"$cache_file"
+  fi
+fi

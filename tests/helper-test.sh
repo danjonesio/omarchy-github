@@ -14,6 +14,8 @@ if "$HELPER" --failed-days 0 >/dev/null 2>&1; then fail "invalid failed window s
 if "$HELPER" --mark-notification-read nope >/dev/null 2>&1; then fail "invalid notification id succeeded"; fi
 if "$HELPER" --mark-notification-read 123 --mark-notification-read nope >/dev/null 2>&1; then fail "invalid bulk notification id succeeded"; fi
 if "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z >/dev/null 2>&1; then fail "legacy last_read_at option succeeded"; fi
+if "$HELPER" --phase nope >/dev/null 2>&1; then fail "invalid phase succeeded"; fi
+if "$HELPER" --mark-notification-done nope >/dev/null 2>&1; then fail "invalid done id succeeded"; fi
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT
@@ -36,6 +38,7 @@ assert_jq '.state == "logged-out" and (.repositories|length) == 0' "$out" "logge
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ $1 == auth ]]; then exit 0; fi
+if [[ $1 == api && $2 == user ]]; then echo octocat; exit 0; fi
 if [[ $1 == api && $2 == --method && $3 == PATCH ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   id=${4##*/}
@@ -46,6 +49,12 @@ fi
 if [[ $1 == api && $2 == --method && $3 == PUT ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   exit 9
+fi
+if [[ $1 == api && $2 == --method && $3 == DELETE ]]; then
+  printf '%s\n' "$*" >>"$GH_TEST_LOG"
+  id=${4##*/}
+  [[ $id == 123 || $id == 124 || $id == 125 ]] || exit 9
+  printf '%s\n' '{}'; exit 0
 fi
 if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
@@ -112,6 +121,7 @@ GH
 chmod +x "$sandbox/gh"
 out=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all --failed-days 7 --failed-limit 5)
 assert_jq '.state == "ready" and .login == "octocat"' "$out" "ready state"
+assert_jq '.phase == "all"' "$out" "default phase is all"
 assert_jq '.repositories|length == 1 and .[0].issues == 3 and .[0].prs == 2 and .[0].stars == 42 and .[0].activeActions == 1' "$out" "repository metrics"
 assert_jq '.notifications|length == 2 and .[0].url == "https://github.com/octocat/hello/pull/7" and .[1].url == "https://github.com/octocat/hello"' "$out" "type-aware notification conversion and fallback"
 assert_jq '.reviewRequests|length == 1 and .[0].repository == "octocat/hello"' "$out" "review requests"
@@ -158,8 +168,18 @@ grep -q 'ownerAffiliations:\[OWNER,ORGANIZATION_MEMBER\],' "$GH_TEST_LOG" || fai
 if grep -q 'ownerAffiliations:OWNER,' "$GH_TEST_LOG"; then fail "owned affiliation used despite the organization scope"; fi
 
 : >"$GH_TEST_LOG"
+inbox=$(PATH="$sandbox:$PATH" "$HELPER" --phase inbox --action-scan all)
+assert_jq '.phase == "inbox" and .login == "octocat" and (.myPullRequests|length) == 2 and (.actions|length) == 0' "$inbox" "inbox phase skips actions"
+if grep -q 'ownerAffiliations:' "$GH_TEST_LOG"; then fail "inbox phase still listed repositories"; fi
+if grep -q '/actions/runs' "$GH_TEST_LOG"; then fail "inbox phase still scanned Actions"; fi
+
+: >"$GH_TEST_LOG"
 mark=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123)
 assert_jq '.state == "ready" and .notificationId == "123"' "$mark" "mark notification read"
+: >"$GH_TEST_LOG"
+done_mark=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-done 123)
+assert_jq '.state == "ready" and .notificationId == "123" and (.message|test("done"))' "$done_mark" "mark notification done"
+grep -q 'api --method DELETE /notifications/threads/123' "$GH_TEST_LOG" || fail "done did not DELETE the thread"
 : >"$GH_TEST_LOG"
 mark_all=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123 --mark-notification-read 124)
 assert_jq '.state == "ready" and .count == 2' "$mark_all" "mark all notifications read"

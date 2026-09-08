@@ -15,6 +15,7 @@ Item {
     property string login: ""
     property string fetchedRepositoryScope: "owned"
     property string fetchedAt: ""
+    property string actionsFetchedAt: ""
     property var notifications: []
     property int notificationsRevision: 0
     property var reviewRequests: []
@@ -29,6 +30,11 @@ Item {
     property string _stdout: ""
     property string _stderr: ""
     property bool refreshQueued: false
+    property bool inboxLoading: false
+    property bool actionsLoading: false
+    property string fetchPhase: "inbox"
+    property bool followUpActions: true
+    property string markingMode: "read"
     property string markingNotificationId: ""
     property bool markingAllNotifications: false
     property var markingAllNotificationIds: []
@@ -58,7 +64,7 @@ Item {
     // An unrecognised value falls back to the web app window rather than the
     // browser, so a stale entry cannot silently revert the default behaviour.
     readonly property string linkBehavior: String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"
-    readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || actionCount > 0 || reviewRequests.length > 0 || failingPullRequestCount > 0)
+    readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || failingPullRequestCount > 0)
 
     // StatusCheckRollup groupings live here so the alarming count, the row label
     // and the row glyph cannot drift apart when a state is reclassified.
@@ -116,8 +122,26 @@ Item {
         return decodeURIComponent(Qt.resolvedUrl("omarchy-github-fetch").toString().replace(/^file:\/\//, ""));
     }
 
-    function command() {
-        return [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
+    function cachePath() {
+        var xdg = String(Quickshell.env("XDG_CACHE_HOME") || "");
+        var home = String(Quickshell.env("HOME") || "");
+        var dir = xdg !== "" ? xdg : (home + "/.cache");
+        return dir + "/omarchy-github/state.json";
+    }
+
+    function isFresh() {
+        var at = String(fetchedAt || "");
+        if (at === "")
+            return false;
+        var t = Date.parse(at);
+        if (!isFinite(t))
+            return false;
+        return (Date.now() - t) < 60000;
+    }
+
+    function command(phase) {
+        var p = phase || "all";
+        return [helperPath(), "--phase", p, "--cache-file", cachePath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
     }
 
     function copyMap(value) {
@@ -226,69 +250,104 @@ Item {
         return visible;
     }
 
-    function enqueueMark(id) {
+    function enqueueMark(id, mode) {
         var value = String(id || "");
-        if (value === "" || markingNotificationId === value)
+        var kind = mode === "done" ? "done" : "read";
+        if (value === "")
+            return ;
+        var token = kind + ":" + value;
+        if (markingNotificationId === value && markingMode === kind)
             return ;
 
         for (var i = 0; i < markQueue.length; i++) {
-            if (markQueue[i] === value)
+            if (markQueue[i] === token)
                 return ;
         }
-        markQueue = markQueue.concat([value]);
+        markQueue = markQueue.concat([token]);
     }
 
     function startQueuedMark() {
-        if (fetchProcess.running || markProcess.running || markQueue.length === 0)
+        if (markProcess.running || markQueue.length === 0)
             return false;
 
-        var value = String(markQueue[0] || "");
+        var token = String(markQueue[0] || "");
         markQueue = markQueue.slice(1);
+        var sep = token.indexOf(":");
+        var kind = sep > 0 ? token.substring(0, sep) : "read";
+        var value = sep > 0 ? token.substring(sep + 1) : token;
         if (value === "")
             return startQueuedMark();
 
         actionStatusTimer.stop();
         markingNotificationId = value;
-        notificationActionStatus = "Marking notification read…";
+        markingMode = kind === "done" ? "done" : "read";
+        notificationActionStatus = markingMode === "done" ? "Marking notification done…" : "Marking notification read…";
         _markStdout = "";
         _markStderr = "";
-        markProcess.command = [helperPath(), "--mark-notification-read", value];
+        markProcess.command = [helperPath(), markingMode === "done" ? "--mark-notification-done" : "--mark-notification-read", value];
         markProcess.running = true;
         return true;
     }
 
-    function refresh() {
+    function startPhase(phase, thenActions) {
+        fetchPhase = phase;
+        followUpActions = thenActions !== false;
+        if (phase === "inbox" && login === "" && notifications.length === 0)
+            loading = true;
+        if (phase === "inbox")
+            inboxLoading = true;
+        else
+            actionsLoading = true;
+        _stdout = "";
+        _stderr = "";
+        fetchProcess.command = command(phase);
+        fetchProcess.running = true;
+    }
+
+    function refresh(force) {
+        var forced = force === true;
+        if (!forced && isFresh()) {
+            if (actionMode() !== "off" && actionsFetchedAt === "" && !actionsLoading && !fetchProcess.running)
+                startPhase("actions", false);
+            return ;
+        }
         if (fetchProcess.running || markProcess.running || markQueue.length > 0) {
             refreshQueued = true;
             return ;
         }
         refreshQueued = false;
-        loading = true;
-        _stdout = "";
-        _stderr = "";
-        fetchProcess.command = command();
-        fetchProcess.running = true;
+        startPhase("inbox", true);
     }
 
     function apply(raw) {
         try {
             var data = JSON.parse(String(raw || ""));
+            var phase = String(data.phase || "all");
             state = String(data.state || "error");
             message = String(data.message || "");
-            login = String(data.login || "");
-            fetchedRepositoryScope = String(data.repositoryScope || "owned");
-            fetchedAt = String(data.fetchedAt || "");
-            notifications = visibleNotifications(data.notifications);
-            notificationsRevision++;
-            reviewRequests = Array.isArray(data.reviewRequests) ? data.reviewRequests : [];
-            assignedIssues = Array.isArray(data.assignedIssues) ? data.assignedIssues : [];
-            myPullRequests = Array.isArray(data.myPullRequests) ? data.myPullRequests : [];
-            myPullRequestsTotal = Number(data.myPullRequestsTotal) || myPullRequests.length;
-            actions = Array.isArray(data.actions) ? data.actions : [];
-            failedActions = Array.isArray(data.failedActions) ? data.failedActions : [];
-            repositories = Array.isArray(data.repositories) ? data.repositories : [];
-            warnings = Array.isArray(data.warnings) ? data.warnings : [];
-            rateLimit = data.rateLimit || null;
+            if (String(data.login || "") !== "")
+                login = String(data.login);
+            fetchedRepositoryScope = String(data.repositoryScope || fetchedRepositoryScope || "owned");
+            if (phase !== "actions")
+                fetchedAt = String(data.fetchedAt || fetchedAt);
+            if (phase !== "inbox")
+                actionsFetchedAt = String(data.actionsFetchedAt || data.fetchedAt || actionsFetchedAt);
+            if (phase !== "actions") {
+                notifications = visibleNotifications(data.notifications);
+                notificationsRevision++;
+                reviewRequests = Array.isArray(data.reviewRequests) ? data.reviewRequests : [];
+                assignedIssues = Array.isArray(data.assignedIssues) ? data.assignedIssues : [];
+                myPullRequests = Array.isArray(data.myPullRequests) ? data.myPullRequests : [];
+                myPullRequestsTotal = Number(data.myPullRequestsTotal) || myPullRequests.length;
+            }
+            if (phase !== "inbox") {
+                actions = Array.isArray(data.actions) ? data.actions : [];
+                failedActions = Array.isArray(data.failedActions) ? data.failedActions : [];
+                repositories = Array.isArray(data.repositories) ? data.repositories : repositories;
+            }
+            warnings = Array.isArray(data.warnings) ? data.warnings : warnings;
+            if (data.rateLimit)
+                rateLimit = data.rateLimit;
         } catch (error) {
             state = "error";
             message = "GitHub returned an unreadable response.";
@@ -301,11 +360,18 @@ Item {
         if (value === "")
             return ;
 
-        // Drop the row before GitHub round-trips. Opening a thread while a
-        // refresh is already running used to no-op, so the icon stayed alarming
-        // until the next poll even after the user had seen the notification.
         hideNotification(value);
-        enqueueMark(value);
+        enqueueMark(value, "read");
+        startQueuedMark();
+    }
+
+    function markNotificationDone(id) {
+        var value = String(id || "");
+        if (value === "")
+            return ;
+
+        hideNotification(value);
+        enqueueMark(value, "done");
         startQueuedMark();
     }
 
@@ -398,12 +464,17 @@ Item {
 
     visible: false
 
+    Component.onCompleted: {
+        cacheRead.command = ["cat", cachePath()];
+        cacheRead.running = true;
+    }
+
     Timer {
         interval: root.refreshIntervalSec * 1000
         repeat: true
         running: true
-        triggeredOnStart: true
-        onTriggered: root.refresh()
+        triggeredOnStart: false
+        onTriggered: root.refresh(true)
     }
 
     Timer {
@@ -415,26 +486,58 @@ Item {
     }
 
     Process {
+        id: cacheRead
+
+        running: false
+        command: ["cat", "/dev/null"]
+        onExited: function(exitCode) {
+            if (exitCode === 0) {
+                var stdout = String(cacheOutput.text || "");
+                if (stdout.trim() !== "")
+                    root.apply(stdout);
+            }
+            Qt.callLater(function() { root.refresh(false); });
+        }
+
+        stdout: StdioCollector {
+            id: cacheOutput
+
+            waitForEnd: true
+        }
+    }
+
+    Process {
         id: fetchProcess
 
         running: false
         command: []
         onExited: function(exitCode) {
-            root.loading = false;
+            var phase = root.fetchPhase;
             var stdout = String(output.text || root._stdout || "");
             var stderr = String(errors.text || root._stderr || "").trim();
             if (stdout.trim() !== "") {
                 root.apply(stdout);
-            } else {
+            } else if (phase !== "actions") {
                 root.state = "error";
                 root.message = stderr !== "" ? stderr : "GitHub data refresh failed.";
+            }
+            if (phase === "inbox") {
+                root.loading = false;
+                root.inboxLoading = false;
+                if (root.followUpActions && root.actionMode() !== "off") {
+                    root.startPhase("actions", false);
+                    return ;
+                }
+                root.actionsLoading = false;
+            } else {
+                root.actionsLoading = false;
             }
             if (root.startQueuedMark())
                 return ;
 
             if (root.refreshQueued) {
                 root.refreshQueued = false;
-                Qt.callLater(root.refresh);
+                Qt.callLater(function() { root.refresh(true); });
             }
         }
 
@@ -467,10 +570,11 @@ Item {
             }
             var all = root.markingAllNotifications;
             var markedId = root.markingNotificationId;
+            var mode = root.markingMode;
             if (exitCode === 0 && response && response.state === "ready") {
-                root.notificationActionStatus = all ? "Notifications marked read. Refreshing…" : "Notification marked read. Refreshing…";
+                root.notificationActionStatus = all ? "Notifications marked read. Updating…" : (mode === "done" ? "Notification marked done." : "Notification marked read.");
             } else {
-                var fallback = all ? "Could not mark all notifications read." : "Could not mark notification read.";
+                var fallback = all ? "Could not mark all notifications read." : (mode === "done" ? "Could not mark notification done." : "Could not mark notification read.");
                 root.notificationActionStatus = response && response.message ? String(response.message) : String(markErrors.text || root._markStderr || fallback).trim();
                 if (all)
                     root.restoreHiddenNotifications(root.markingAllNotificationIds);
@@ -478,16 +582,15 @@ Item {
                     root.restoreHiddenNotification(markedId);
             }
             root.markingNotificationId = "";
+            root.markingMode = "read";
             root.markingAllNotifications = false;
             root.markingAllNotificationIds = [];
             actionStatusTimer.restart();
             if (root.startQueuedMark())
                 return ;
 
-            // GitHub is authoritative after every attempt. This reconciles
-            // successful, failed, and partially completed bulk operations.
             root.refreshQueued = false;
-            Qt.callLater(root.refresh);
+            Qt.callLater(function() { root.startPhase("inbox", false); });
         }
 
         stdout: StdioCollector {

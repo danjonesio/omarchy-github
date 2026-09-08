@@ -32,10 +32,6 @@ Panel {
     { value: "Web app window", label: "Web app window" },
     { value: "Browser tab", label: "Browser tab" }
   ]
-  readonly property var repositoryScopeOptions: [
-    { value: "Owned", label: "Owned repositories" },
-    { value: "Owned and organizations", label: "Owned and organizations" }
-  ]
   readonly property var refreshIntervalOptions: [
     { value: "300", label: "Every 5 minutes" },
     { value: "600", label: "Every 10 minutes" },
@@ -108,7 +104,10 @@ Panel {
     if (kind === "notification") github.markNotificationRead(notificationId)
   }
   function markSelectedRead() {
-    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))
+    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row["id"] || selectedTarget.row.id || ""))
+  }
+  function markSelectedDone() {
+    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationDone(String(selectedTarget.row["id"] || selectedTarget.row.id || ""))
   }
   function applyPanelWheel(event) {
     if (!panelFlick) return false
@@ -200,7 +199,6 @@ Panel {
     pendingSettingsOpen = next
     // A popup left open would float over the card while it flips.
     linkBehaviorDropdown.close()
-    repositoryScopeDropdown.close()
     refreshIntervalDropdown.close()
     pageFlip.restart()
   }
@@ -234,7 +232,7 @@ Panel {
       cursorActive = false
       cursorIndex = 0
       if (panelFlick) panelFlick.contentY = 0
-      github.refresh()
+      github.refresh(false)
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     }
   }
@@ -249,7 +247,7 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function refresh(): string { github.refresh(); return "ok" }
+    function refresh(): string { github.refresh(true); return "ok" }
     function status(): string { return github.state }
     function debug(): string {
       var first = github.notifications.length > 0 ? github.threadId(github.notifications[0]) : ""
@@ -293,9 +291,21 @@ Panel {
     text: ""
     active: github.alarming
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) github.refresh()
+      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) github.refresh(true)
       else root.toggle()
     }
+  }
+
+  Text {
+    visible: github.unreadCount > 0
+    z: 2
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    text: github.unreadCount > 99 ? "99+" : String(github.unreadCount)
+    color: root.urgent
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    font.bold: true
   }
 
   KeyboardPanel {
@@ -324,8 +334,9 @@ Panel {
       }
       onTextKey: function(text) {
         if (root.settingsOpen) return
-        if (text === "r" || text === "R") github.refresh()
+        if (text === "r" || text === "R") github.refresh(true)
         else if (text === "m" || text === "M") root.markSelectedRead()
+        else if (text === "d" || text === "D") root.markSelectedDone()
       }
 
       // Rotating the key catcher flips both pages together as one card.
@@ -394,9 +405,16 @@ Panel {
             title: github.login !== "" ? "GitHub · " + github.login : "GitHub"
             // Mirrors every term of the alarming state, so the summary always
             // explains why the bar icon is lit.
-            meta: github.loading ? "Refreshing dashboard…" : (github.state === "ready" ?
-              github.unreadCount + " unread · " + github.reviewRequests.length + " reviews · " + github.actionCount + " active actions"
-                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : github.message)
+            meta: {
+              if (github.login === "" && github.loading) return "Refreshing dashboard…"
+              if (github.state !== "ready" && github.login === "") return github.message
+              var parts = [github.unreadCount + " unread"]
+              if (github.reviewRequests.length > 0) parts.push(github.reviewRequests.length + " reviews")
+              if (github.failingPullRequestCount > 0) parts.push(github.failingPullRequestCount + " failing")
+              if (github.actionCount > 0) parts.push(github.actionCount + " running")
+              if (github.inboxLoading || github.actionsLoading) parts.push("updating")
+              return parts.join(" · ")
+            }
             foreground: root.foreground
             fontFamily: root.fontFamily
             // The hero reserves the trailing space and centres the control
@@ -663,33 +681,6 @@ Panel {
               spacing: Style.space(6)
 
               Text {
-                text: "REPOSITORY SCOPE"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-
-              Dropdown {
-                id: repositoryScopeDropdown
-                width: parent.width
-                showLabel: false
-                options: root.repositoryScopeOptions
-                foreground: root.foreground
-                background: Color.popups.background
-                accent: Color.accent
-                fontFamily: root.fontFamily
-                onChanged: function(value) { root.persistSettings({ repositoryScope: value }) }
-
-                Binding on value { value: String(root.setting("repositoryScope", "Owned")) }
-              }
-            }
-
-            Column {
-              width: parent.width
-              spacing: Style.space(6)
-
-              Text {
                 text: "REFRESH INTERVAL"
                 color: root.dim
                 font.family: root.fontFamily
@@ -713,47 +704,9 @@ Panel {
               }
             }
 
-            PanelSeparator {
-              width: parent.width
-              foreground: root.foreground
-            }
-
-            Toggle {
-              width: parent.width
-              label: "Keep the bar icon unlit"
-              description: "Leave the Octocat dim even when notifications, reviews, or failing actions are waiting."
-              checked: github.iconAlwaysUnlit
-              foreground: root.foreground
-              accent: Color.accent
-              fontFamily: root.fontFamily
-              onClicked: root.persistSettings({ iconAlwaysUnlit: !github.iconAlwaysUnlit })
-            }
-
-            Toggle {
-              width: parent.width
-              label: "Include archived repositories"
-              description: "Include archived repositories when scanning Actions."
-              checked: root.setting("includeArchived", false) === true
-              foreground: root.foreground
-              accent: Color.accent
-              fontFamily: root.fontFamily
-              onClicked: root.persistSettings({ includeArchived: !(root.setting("includeArchived", false) === true) })
-            }
-
-            Toggle {
-              width: parent.width
-              label: "Include forked repositories"
-              description: "Include forks when scanning Actions."
-              checked: root.setting("includeForks", false) === true
-              foreground: root.foreground
-              accent: Color.accent
-              fontFamily: root.fontFamily
-              onClicked: root.persistSettings({ includeForks: !(root.setting("includeForks", false) === true) })
-            }
-
             Text {
               width: parent.width
-              text: "The remaining options — Actions scanning and review request filters — stay in Omarchy's bar widget settings."
+              text: "Actions scanning still runs in the background after the inbox loads."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -779,8 +732,9 @@ Panel {
       detail: modelData.repository + " · " + modelData.reason + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
       showReadAction: true
+      showDoneAction: true
       showTrailingIndicator: false
-      notificationId: String(modelData.id || "")
+      notificationId: String(modelData["id"] || modelData.id || "")
     }
   }
 
@@ -853,7 +807,13 @@ Panel {
       rowId: String(modelData.id || modelData.url || index)
       glyph: "󰑮"
       title: modelData.name
-      detail: modelData.repository + " · " + modelData.status + (modelData.branch ? " · " + modelData.branch : "")
+      detail: {
+        var parts = [modelData.repository, modelData.status]
+        if (modelData.job) parts.push(modelData.job)
+        if (modelData.step) parts.push(modelData.step)
+        if (modelData.branch) parts.push(modelData.branch)
+        return parts.join(" · ")
+      }
       url: modelData.url
       pulse: true
     }
@@ -1057,6 +1017,7 @@ Panel {
     property bool pulse: false
     property bool danger: false
     property bool showReadAction: false
+    property bool showDoneAction: false
     property bool showTrailingIndicator: true
     property string notificationId: ""
     property string rowKind: ""
@@ -1078,10 +1039,10 @@ Panel {
     RowLayout {
       id: row
       anchors.left: parent.left
-      anchors.right: readActionStrip.visible ? readActionStrip.left : parent.right
+      anchors.right: notificationActions.visible ? notificationActions.left : parent.right
       anchors.verticalCenter: parent.verticalCenter
       anchors.leftMargin: Style.space(9)
-      anchors.rightMargin: readActionStrip.visible ? 0 : Style.space(9)
+      anchors.rightMargin: notificationActions.visible ? 0 : Style.space(9)
       spacing: Style.space(9)
       Text {
         text: linkRow.glyph
@@ -1127,12 +1088,12 @@ Panel {
       }
     }
     BorderSurface {
-      id: readActionStrip
+      id: notificationActions
       visible: linkRow.showReadAction
       anchors.right: parent.right
       anchors.top: parent.top
       anchors.bottom: parent.bottom
-      width: Style.space(32)
+      width: Style.space(linkRow.showDoneAction ? 64 : 32)
       radius: 0
       color: "transparent"
       borderSpec: Border.none()
@@ -1149,17 +1110,34 @@ Panel {
         color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.16)
       }
 
-      PanelActionButton {
-        id: readAction
+      Row {
         anchors.fill: parent
-        enabled: github.markingNotificationId !== linkRow.notificationId
-        iconText: github.markingNotificationId === linkRow.notificationId ? "󰑐" : "󰄬"
-        tooltipText: "Mark this notification read (M)"
-        foreground: root.foreground
-        hoverColor: Color.accent
-        fontFamily: root.fontFamily
-        bordered: false
-        onClicked: github.markNotificationRead(linkRow.notificationId)
+        anchors.leftMargin: Style.normalBorderWidth
+        PanelActionButton {
+          visible: linkRow.showDoneAction
+          width: parent.width / (linkRow.showDoneAction ? 2 : 1)
+          height: parent.height
+          enabled: github.markingNotificationId !== linkRow.notificationId
+          iconText: github.markingNotificationId === linkRow.notificationId && github.markingMode === "done" ? "󰑐" : "󰪩"
+          tooltipText: "Done (D)"
+          foreground: root.foreground
+          hoverColor: Color.accent
+          fontFamily: root.fontFamily
+          bordered: false
+          onClicked: github.markNotificationDone(linkRow.notificationId)
+        }
+        PanelActionButton {
+          width: parent.width / (linkRow.showDoneAction ? 2 : 1)
+          height: parent.height
+          enabled: github.markingNotificationId !== linkRow.notificationId
+          iconText: github.markingNotificationId === linkRow.notificationId && github.markingMode !== "done" ? "󰑐" : "󰄬"
+          tooltipText: "Mark read (M)"
+          foreground: root.foreground
+          hoverColor: Color.accent
+          fontFamily: root.fontFamily
+          bordered: false
+          onClicked: github.markNotificationRead(linkRow.notificationId)
+        }
       }
     }
   }
