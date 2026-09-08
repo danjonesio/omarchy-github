@@ -13,8 +13,8 @@ This is a fork of [robzolkos/omarchy-github](https://github.com/robzolkos/omarch
 The dashboard is ordered by urgency so the most actionable work appears first:
 
 - **Unread notifications** — up to 20 rows at a time; open the thread, mark it read, or mark it Done
-- **Review requests** — see pull requests waiting on your review
-- **My pull requests** — track the pull requests you opened and the state of their checks
+- **Review requests** — pull requests waiting on you, with approval progress (`0/2 approved`) and check state
+- **My pull requests** — your open PRs with `n/m approved` and the state of their checks
 - **Assigned issues** — keep track of open issues assigned to you
 - **Running Actions** — pinned to omarchy and NetCask; live rows show the job pipeline (`Setup ✓ · Build ● · Test ○`) and current step
 
@@ -184,7 +184,7 @@ The shell watches local plugin files, making QML iteration fast.
 
 - REST retrieves notifications and workflow runs on the watch list.
 - GitHub issue search retrieves review requests and assigned issues.
-- GraphQL search retrieves your authored pull requests together with the head commit's `statusCheckRollup`, so check state costs no extra request.
+- GraphQL search retrieves review requests and your authored pull requests together with check rollup and approval counts (`approved` of `requested`), so `0/2 approved` costs no extra request. Reviewer names are omitted on purpose.
 - Live runs fetch jobs so the panel can show the pipeline stage.
 - Independent requests allow successful sections to remain available when one endpoint fails.
 

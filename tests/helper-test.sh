@@ -62,9 +62,15 @@ if [[ $1 == api && $2 == --method && $3 == DELETE ]]; then
 fi
 if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
+  if [[ $* == *review-requested:@me* ]]; then
+    cat <<'JSON'
+{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Please review","url":"https://github.com/octocat/hello/pull/7","updatedAt":"2026-01-02T00:00:00Z","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","latestReviews":{"nodes":[{"state":"APPROVED"}]},"reviewRequests":{"totalCount":1},"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}]}}}
+JSON
+    exit 0
+  fi
   if [[ $* == *author:@me* ]]; then
     cat <<'JSON'
-{"data":{"search":{"issueCount":2,"nodes":[{"number":7,"title":"Ship it","url":"https://github.com/octocat/hello/pull/7","updatedAt":"2026-01-05T00:00:00Z","isDraft":false,"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},{"number":9,"title":"No CI here","url":"https://github.com/octocat/quiet/pull/9","updatedAt":"2026-01-04T00:00:00Z","isDraft":true,"repository":{"nameWithOwner":"octocat/quiet"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}}
+{"data":{"search":{"issueCount":2,"nodes":[{"number":7,"title":"Ship it","url":"https://github.com/octocat/hello/pull/7","updatedAt":"2026-01-05T00:00:00Z","isDraft":false,"reviewDecision":null,"latestReviews":{"nodes":[]},"reviewRequests":{"totalCount":2},"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},{"number":9,"title":"No CI here","url":"https://github.com/octocat/quiet/pull/9","updatedAt":"2026-01-04T00:00:00Z","isDraft":true,"reviewDecision":"CHANGES_REQUESTED","latestReviews":{"nodes":[{"state":"CHANGES_REQUESTED"}]},"reviewRequests":{"totalCount":0},"repository":{"nameWithOwner":"octocat/quiet"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}}
 JSON
     exit 0
   fi
@@ -76,12 +82,6 @@ printf '%s\n' "$*" >>"$GH_TEST_LOG"
 if [[ $endpoint == /notifications* ]]; then
   cat <<'JSON'
 [{"id":"123","unread":true,"reason":"mention","updated_at":"2026-01-03T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"https://github.com/octocat/hello"},"subject":{"title":"Review this","type":"PullRequest","url":"https://api.github.com/repos/octocat/hello/pulls/7","latest_comment_url":null}},{"id":"124","unread":true,"reason":"subscribed","updated_at":"2026-01-02T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"https://github.com/octocat/hello"},"subject":{"title":"Unknown subject","type":"RepositoryVulnerabilityAlert","url":"https://api.github.com/repos/octocat/hello/private-vulnerability-reporting/1","latest_comment_url":"https://api.github.com/repos/octocat/hello/comments/1"}}]
-JSON
-  exit 0
-fi
-if [[ $endpoint == /search/issues\?q=is%3Aopen+is%3Apr* ]]; then
-  cat <<'JSON'
-{"items":[{"id":71,"number":7,"title":"Please review","repository_url":"https://api.github.com/repos/octocat/hello","html_url":"https://github.com/octocat/hello/pull/7","updated_at":"2026-01-02T00:00:00Z","user":{"login":"friend"}}]}
 JSON
   exit 0
 fi
@@ -125,16 +125,19 @@ assert_jq '.phase == "all"' "$out" "default phase is all"
 assert_jq '.repositories|length == 1 and .[0].nameWithOwner == "octocat/hello"' "$out" "watch list is the scanned repository"
 assert_jq '.notifications|length == 2 and .[0].url == "https://github.com/octocat/hello/pull/7" and .[1].url == "https://github.com/octocat/hello"' "$out" "type-aware notification conversion and fallback"
 assert_jq '.reviewRequests|length == 1 and .[0].repository == "octocat/hello"' "$out" "review requests"
+assert_jq '(.reviewRequests[0].approved == 1) and (.reviewRequests[0].requested == 2) and (.reviewRequests[0].checks == "SUCCESS")' "$out" "review requests carry approval progress and checks"
 assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].url|endswith("/issues/8"))' "$out" "assigned issues"
 assert_jq '(.actions|length == 1) and (.failedActions|length == 1) and (.failedActions[0].id == 12)' "$out" "active run plus last failure per watch repo"
 assert_jq '(.actions[0].jobs|length == 3) and (.actions[0].job == "Build") and (.actions[0].step == "Compile")' "$out" "live run carries job pipeline and current step"
 assert_jq '(.myPullRequests|length == 2) and (.myPullRequests[0].id == "octocat/hello#7") and (.myPullRequests[0].checks == "FAILURE")' "$out" "authored pull requests with check rollup"
-assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true)' "$out" "missing rollup falls back to NONE"
+assert_jq '(.myPullRequests[0].approved == 0) and (.myPullRequests[0].requested == 2) and (.myPullRequests[0].changesRequested == false)' "$out" "authored PR reports 0/2 approved"
+assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true) and (.myPullRequests[1].changesRequested == true)' "$out" "missing rollup falls back to NONE and changes requested is kept"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"
 assert_jq '(.warnings|length) == 0' "$out" "no warnings on the happy path"
 grep -q 'author:@me.*sort:updated-desc' "$GH_TEST_LOG" || fail "authored pull request search was not server sorted"
 grep -q 'author:@me.*archived:false' "$GH_TEST_LOG" || fail "authored pull request search was not archive filtered"
-grep -q 'review-requested%3A%40me+draft%3Afalse+archived%3Afalse' "$GH_TEST_LOG" || fail "review request search was not draft and archive filtered"
+grep -q 'review-requested:@me' "$GH_TEST_LOG" || fail "review request search was not GraphQL"
+grep -q 'review-requested:@me.*draft:false' "$GH_TEST_LOG" || fail "review request search was not draft filtered"
 grep -q 'assignee%3A%40me+archived%3Afalse' "$GH_TEST_LOG" || fail "assigned issue search was not archive filtered"
 grep -q '/repos/octocat/hello/actions/runs?status=queued' "$GH_TEST_LOG" || fail "watch repo was not scanned for queued Actions"
 grep -q '/repos/octocat/hello/actions/runs/10/jobs' "$GH_TEST_LOG" || fail "live run did not fetch jobs"
@@ -243,6 +246,12 @@ cat >"$sandbox/gh" <<'GH'
 if [[ $1 == auth ]]; then exit 0; fi
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
 if [[ $1 == api && $2 == graphql ]]; then
+  if [[ $* == *review-requested:@me* ]]; then
+    cat <<'JSON'
+{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Please review","url":"https://evil.example/pull/7","updatedAt":"2026-01-02T00:00:00Z","isDraft":false,"reviewDecision":null,"latestReviews":{"nodes":[]},"reviewRequests":{"totalCount":1},"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}}
+JSON
+    exit 0
+  fi
   if [[ $* == *author:@me* ]]; then
     cat <<'JSON'
 {"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Ship it","url":"javascript:alert(1)","updatedAt":"2026-01-05T00:00:00Z","isDraft":false,"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}]}}}

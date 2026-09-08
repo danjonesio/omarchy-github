@@ -14,6 +14,12 @@ assert_not_contains() {
 
 assert_contains 'glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))' \
   "authored pull requests without checks do not use the pull request glyph"
+assert_contains $'if (m > 0) return n + "/" + m + " approved"' \
+  "pull requests do not show approval progress as n/m"
+assert_contains 'if (row.changesRequested) return "changes requested"' \
+  "changes requested is not preferred over the approval fraction"
+assert_not_contains 'waiting on' \
+  "reviewer names are still rendered in the row detail"
 assert_contains $'text: linkRow.title\n          textFormat: Text.PlainText' \
   "row titles are not forced to plain text"
 assert_contains $'text: linkRow.detail\n          textFormat: Text.PlainText' \

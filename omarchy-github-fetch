@@ -238,32 +238,47 @@ fetch_search() {
     jq -s "$jq_github_url"'[.[] | .items[]? | {id:(.id|tostring),number,title:(.title // ""),repository:(.repository_url // "" | sub("^https://api.github.com/repos/";"") | github_repo),url:((.html_url // "") | github_url),updatedAt:(.updated_at // ""),user:(.user.login // ""),draft:(.draft // false)}] | sort_by(.updatedAt) | reverse' "$pages" >"$output" 2>/dev/null || { printf '[]\n' >"$output"; printf '%s: invalid API response\n' "$label" >>"$warnings"; }
   else printf '[]\n' >"$output"; fi
 }
-if $fetch_inbox; then
-fetch_search review-requests "is%3Aopen+is%3Apr+review-requested%3A%40me+draft%3Afalse+archived%3Afalse" "$tmp/reviews.json"
-fetch_search assigned-issues "is%3Aopen+is%3Aissue+assignee%3A%40me+archived%3Afalse" "$tmp/issues.json"
+# Pull-request search is GraphQL so check rollup and review counts arrive with
+# the row. latestReviews is one review per person; approved + still-requested
+# is the n/m denominator. Reviewer logins stay out of the payload on purpose.
+pr_search_query='query($search:String!) { search(query:$search,type:ISSUE,first:50) { issueCount nodes { ... on PullRequest { number title url updatedAt isDraft reviewDecision latestReviews(first:20) { nodes { state } } reviewRequests { totalCount } repository { nameWithOwner } commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } } } }'
+jq_pr_nodes="$jq_github_url"'
+def review_stats:
+  ((.latestReviews.nodes // []) | map(select(.state == "APPROVED")) | length) as $approved
+  | ((.latestReviews.nodes // []) | map(select(.state == "CHANGES_REQUESTED")) | length) as $changes
+  | ((.reviewRequests.totalCount // 0)) as $pending
+  | {approved:$approved, requested:($approved + $pending), changesRequested:($changes > 0 or .reviewDecision == "CHANGES_REQUESTED")};
+[.data.search.nodes[] | select(.number != null) |
+  ((.repository.nameWithOwner // "") | github_repo) as $repo |
+  review_stats as $r |
+  {id:($repo + "#" + (.number|tostring)),number,title:(.title // ""),
+   repository:$repo,url:((.url // "") | github_url),updatedAt:(.updatedAt // ""),
+   draft:(.isDraft // false),checks:(.commits.nodes[0].commit.statusCheckRollup.state // "NONE"),
+   approved:$r.approved, requested:$r.requested, changesRequested:$r.changesRequested}]
+| sort_by(.updatedAt) | reverse'
 
-# Authored pull requests come from GraphQL rather than the search endpoint so
-# the head commit's check rollup arrives with them. The search API carries no
-# check state, which would otherwise cost one request per pull request.
-# Sorted server-side so that if an account exceeds the page size, what survives
-# is the most recently touched work rather than an arbitrary slice. issueCount
-# carries the real total so the panel can say it is showing a subset.
-my_pr_search="is:open is:pr author:@me sort:updated-desc archived:false"
-printf '[]\n' >"$tmp/mypulls.json"
-printf '0\n' >"$tmp/mypulls-total.json"
-if my_pulls=$(gh api graphql -f query='query($search:String!) { search(query:$search,type:ISSUE,first:50) { issueCount nodes { ... on PullRequest { number title url updatedAt isDraft repository { nameWithOwner } commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } } } }' -F search="$my_pr_search" 2>"$tmp/mypulls.err"); then
+fetch_pr_search() {
+  local label=$1 query=$2 list_out=$3 total_out=$4
+  local raw err
+  err="$tmp/$label.err"
+  printf '[]\n' >"$list_out"
+  [[ -n $total_out ]] && printf '0\n' >"$total_out"
+  if ! raw=$(gh api graphql -f query="$pr_search_query" -F search="$query" 2>"$err"); then
+    api_error "$label" "$err"
+    return 1
+  fi
   # A pull request with no configured workflows reports a null rollup, which is
   # a distinct state from pending and must not be rendered as one.
-  printf '%s\n' "$my_pulls" | jq "$jq_github_url"'[.data.search.nodes[] | select(.number != null) |
-    ((.repository.nameWithOwner // "") | github_repo) as $repo |
-    {id:($repo + "#" + (.number|tostring)),number,title:(.title // ""),
-     repository:$repo,url:((.url // "") | github_url),updatedAt:(.updatedAt // ""),
-     draft:(.isDraft // false),checks:(.commits.nodes[0].commit.statusCheckRollup.state // "NONE")}]
-    | sort_by(.updatedAt) | reverse' >"$tmp/mypulls.json" 2>/dev/null || { printf '[]\n' >"$tmp/mypulls.json"; printf '%s\n' 'my-pull-requests: invalid API response' >>"$warnings"; }
-  printf '%s\n' "$my_pulls" | jq '.data.search.issueCount // 0' >"$tmp/mypulls-total.json" 2>/dev/null || printf '0\n' >"$tmp/mypulls-total.json"
-else
-  api_error my-pull-requests "$tmp/mypulls.err"
-fi
+  printf '%s\n' "$raw" | jq "$jq_pr_nodes" >"$list_out" 2>/dev/null || { printf '[]\n' >"$list_out"; printf '%s: invalid API response\n' "$label" >>"$warnings"; }
+  if [[ -n $total_out ]]; then
+    printf '%s\n' "$raw" | jq '.data.search.issueCount // 0' >"$total_out" 2>/dev/null || printf '0\n' >"$total_out"
+  fi
+}
+
+if $fetch_inbox; then
+fetch_search assigned-issues "is%3Aopen+is%3Aissue+assignee%3A%40me+archived%3Afalse" "$tmp/issues.json"
+fetch_pr_search review-requests "is:open is:pr review-requested:@me sort:updated-desc draft:false archived:false" "$tmp/reviews.json" ""
+fetch_pr_search my-pull-requests "is:open is:pr author:@me sort:updated-desc archived:false" "$tmp/mypulls.json" "$tmp/mypulls-total.json"
 else
   printf '[]\n' >"$tmp/reviews.json"
   printf '[]\n' >"$tmp/issues.json"

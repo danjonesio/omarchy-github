@@ -157,6 +157,26 @@ Panel {
     return "no checks"
   }
 
+  function reviewLabel(row) {
+    if (!row) return ""
+    if (row.changesRequested) return "changes requested"
+    var n = Number(row.approved)
+    var m = Number(row.requested)
+    if (!isFinite(n)) n = 0
+    if (!isFinite(m)) m = 0
+    if (m > 0) return n + "/" + m + " approved"
+    return ""
+  }
+
+  function joinDetails(parts) {
+    var out = []
+    for (var i = 0; i < parts.length; i++) {
+      var value = String(parts[i] || "")
+      if (value !== "") out.push(value)
+    }
+    return out.join(" · ")
+  }
+
   // Host must be github.com or gist.github.com, then "/" or end of string, so
   // github.com.evil.com and javascript: / file: URLs cannot pass.
   function allowedGithubUrl(url) {
@@ -745,14 +765,25 @@ Panel {
     LinkRow {
       required property var modelData
       required property int index
+      readonly property string checks: String(modelData.checks || "NONE")
+      readonly property bool broken: github.isBrokenCheck(checks)
+      readonly property bool running: github.isRunningCheck(checks)
       width: parent ? parent.width : 0
       rowKind: "review"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
-      glyph: ""
+      glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))
       title: modelData.title
-      detail: modelData.repository + (modelData.draft ? " · draft" : "") + " · review requested · " + root.relativeTime(modelData.updatedAt)
+      detail: root.joinDetails([
+        modelData.repository,
+        modelData.draft ? "draft" : "",
+        root.reviewLabel(modelData),
+        root.checkLabel(checks),
+        root.relativeTime(modelData.updatedAt)
+      ])
       url: modelData.url
+      danger: broken || !!modelData.changesRequested
+      pulse: running
     }
   }
 
@@ -772,9 +803,15 @@ Panel {
       // plain pull request glyph conveys without implying a pending run.
       glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))
       title: modelData.title
-      detail: modelData.repository + " #" + modelData.number + (modelData.draft ? " · draft" : "") + " · " + root.checkLabel(checks) + " · " + root.relativeTime(modelData.updatedAt)
+      detail: root.joinDetails([
+        modelData.repository + " #" + modelData.number,
+        modelData.draft ? "draft" : "",
+        root.reviewLabel(modelData),
+        root.checkLabel(checks),
+        root.relativeTime(modelData.updatedAt)
+      ])
       url: modelData.url
-      danger: broken
+      danger: broken || !!modelData.changesRequested
       pulse: running
     }
   }
