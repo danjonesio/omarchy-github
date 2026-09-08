@@ -91,6 +91,15 @@ Confirm the installation:
 omarchy plugin list | grep io.github.danjonesio.github
 ```
 
+Live IPC (for debugging the running widget):
+
+```bash
+omarchy-shell io.github.danjonesio.github open
+omarchy-shell io.github.danjonesio.github debug
+omarchy-shell io.github.danjonesio.github clickMarkAll   # arms Confirm?
+omarchy-shell io.github.danjonesio.github confirmMarkAll # PATCHes the armed IDs
+```
+
 ### Update
 
 ```bash

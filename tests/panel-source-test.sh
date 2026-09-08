@@ -24,6 +24,10 @@ assert_contains $'return summary\n              }\n              textFormat: Tex
   "dashboard warning text is not forced to plain text"
 assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            actionEnabled: github.state === "ready" && github.notifications.length > 0 && !github.marking\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
   "notification bulk action is not bound to the prepared displayed snapshot"
+assert_contains 'interactive: false' \
+  "the dashboard Flickable still steals presses from Mark all read"
+assert_contains 'function clickMarkAll(): string' \
+  "mark-all cannot be armed through omarchy-shell IPC"
 assert_contains $'onActionBusyChanged: if (section.actionBusy) section.disarmAction()\n    onActionEnabledChanged: if (!section.actionEnabled) section.disarmAction()' \
   "bulk confirmation is not invalidated when notification state changes"
 assert_not_contains $'onActionRevisionChanged: if (section.actionArmed) section.disarmAction()' \

@@ -290,6 +290,39 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { github.refresh(); return "ok" }
     function status(): string { return github.state }
+    function debug(): string {
+      var first = github.notifications.length > 0 ? github.threadId(github.notifications[0]) : ""
+      var ids = github.notificationIdList(github.notifications)
+      return JSON.stringify({
+        state: github.state,
+        loading: github.loading,
+        marking: github.marking,
+        count: github.notifications.length,
+        firstId: first,
+        idCount: ids ? ids.length : -1,
+        prepare: (ids && ids.length > 0) ? github.markAllSnapshot(ids) : "",
+        actionStatus: github.notificationActionStatus,
+        actionEnabled: notificationsSection ? notificationsSection.actionEnabled : false,
+        actionArmed: notificationsSection ? notificationsSection.actionArmed : false,
+        actionBusy: notificationsSection ? notificationsSection.actionBusy : false
+      })
+    }
+    function clickMarkAll(): string {
+      if (!notificationsSection) return "{\"ok\":false,\"error\":\"no-section\"}"
+      var prepared = String(github.prepareMarkAllNotificationsRead() || "")
+      if (prepared === "")
+        return JSON.stringify({ok: false, status: github.notificationActionStatus, count: github.notifications.length, loading: github.loading})
+      notificationsSection.preparedAction = prepared
+      notificationsSection.actionArmed = true
+      return JSON.stringify({ok: true, armed: true, count: github.notifications.length, preparedChars: prepared.length})
+    }
+    function confirmMarkAll(): string {
+      if (!notificationsSection) return "{\"ok\":false,\"error\":\"no-section\"}"
+      var confirmed = notificationsSection.preparedAction
+      notificationsSection.disarmAction()
+      github.markAllNotificationsRead(confirmed)
+      return JSON.stringify({ok: true, marking: github.marking, confirmedChars: String(confirmed).length, status: github.notificationActionStatus})
+    }
   }
 
   BarIconButton {
@@ -380,7 +413,9 @@ Panel {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
-        interactive: contentHeight > height
+        // WheelHandler owns scrolling. Interactive flick steals the press from
+        // footer buttons, so Mark all read never sees the click that should arm Confirm?
+        interactive: false
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
         // Must be a direct child of Flickable or Qt keeps the default
         // 1–2px wheel distance and this handler never runs.

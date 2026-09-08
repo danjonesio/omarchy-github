@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.danjonesio.github",
   "name": "GitHub",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "author": "Dan Jones",
   "license": "MIT",
   "description": "A keyboard-friendly GitHub inbox for notifications, reviews, your own pull requests, assigned issues, Actions, and repositories.",
