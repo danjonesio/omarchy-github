@@ -22,10 +22,12 @@ assert_contains $'text: github.notificationActionStatus\n            textFormat:
   "notification action status is not forced to plain text"
 assert_contains $'return summary\n              }\n              textFormat: Text.PlainText' \
   "dashboard warning text is not forced to plain text"
-assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            actionEnabled: github.state === "ready" && !github.loading\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
+assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            actionEnabled: github.state === "ready" && github.notifications.length > 0 && !github.marking\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
   "notification bulk action is not bound to the prepared displayed snapshot"
-assert_contains $'onActionBusyChanged: if (section.actionBusy) section.disarmAction()\n    onActionEnabledChanged: if (!section.actionEnabled) section.disarmAction()\n    onActionRevisionChanged: if (section.actionArmed) section.disarmAction()' \
+assert_contains $'onActionBusyChanged: if (section.actionBusy) section.disarmAction()\n    onActionEnabledChanged: if (!section.actionEnabled) section.disarmAction()' \
   "bulk confirmation is not invalidated when notification state changes"
+assert_not_contains $'onActionRevisionChanged: if (section.actionArmed) section.disarmAction()' \
+  "a background refresh still cancels Confirm?"
 assert_contains $'var confirmed = section.preparedAction\n          section.disarmAction()\n          section.actionTriggered(confirmed)' \
   "bulk action does not submit the originally prepared snapshot"
 assert_contains $'function activateCursor() {\n    if (!selectedTarget) return\n    openRow(selectedTarget.kind, selectedTarget.row.id, selectedTarget.row.url)' \

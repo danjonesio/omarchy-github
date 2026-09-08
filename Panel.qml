@@ -487,7 +487,7 @@ Panel {
             delegateComponent: notificationDelegate
             actionText: "Mark all read"
             actionBusyText: "Marking…"
-            actionEnabled: github.state === "ready" && !github.loading
+            actionEnabled: github.state === "ready" && github.notifications.length > 0 && !github.marking
             actionBusy: github.marking
             actionRevision: github.notificationsRevision
             actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }
@@ -1023,7 +1023,9 @@ Panel {
     // would fire on the first click once the button comes back.
     onActionBusyChanged: if (section.actionBusy) section.disarmAction()
     onActionEnabledChanged: if (!section.actionEnabled) section.disarmAction()
-    onActionRevisionChanged: if (section.actionArmed) section.disarmAction()
+    // Do not disarm when a background refresh bumps notificationsRevision.
+    // Opening the panel always refreshes, which used to cancel Confirm?
+    // before it could be seen. The confirm click still re-checks the ID list.
 
     width: parent ? parent.width : 0
     spacing: Style.space(8)
@@ -1051,9 +1053,9 @@ Panel {
     }
     Timer {
       id: actionArmTimer
-      interval: 4000
+      interval: 8000
       repeat: false
-      onTriggered: section.actionArmed = false
+      onTriggered: section.disarmAction()
     }
     Row {
       id: sectionFooter

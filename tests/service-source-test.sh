@@ -34,15 +34,17 @@ assert_not_contains $'if (value === "" || loading || fetchProcess.running || mar
 assert_contains 'String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"' \
   "an unrecognised open-links value does not fall back to the web app window"
 
-assert_contains $'if (loading || fetchProcess.running) {\n            notificationActionStatus = "Wait for GitHub to finish refreshing.";' \
+assert_contains $'if (markProcess.running) {\n            notificationActionStatus = "A mark-as-read is already running.";' \
   "bulk confirmation can be prepared during refresh or marking"
 assert_contains $'if (!/^\\d+$/.test(id))\n                return null;' \
   "bulk confirmation accepts invalid notification IDs"
-assert_contains 'return markAllSnapshot(ids, notificationsRevision);' \
-  "bulk confirmation does not capture its displayed notification IDs and revision"
-assert_contains 'return String(revision) + ":" + ids.join(",");' \
+assert_contains 'return markAllSnapshot(ids);' \
+  "bulk confirmation does not capture its displayed notification IDs"
+assert_contains 'return ids.join(",");' \
   "bulk confirmation still serializes through JSON.parse"
-assert_contains $'function markAllNotificationsRead(prepared) {\n        var confirmed = String(prepared || "");\n        if (confirmed === "" || loading || fetchProcess.running || markProcess.running)\n            return ;' \
+assert_contains 'var value = item["id"];' \
+  "notification thread ids are read through the reserved QML id property"
+assert_contains $'function markAllNotificationsRead(prepared) {\n        var confirmed = String(prepared || "");\n        if (confirmed === "" || markProcess.running)\n            return ;' \
   "bulk marking is not blocked during refresh"
 assert_contains $'if (confirmed !== prepareMarkAllNotificationsRead()) {\n            notificationActionStatus = "Notifications changed. Confirm again.";' \
   "bulk marking does not verify the confirmed snapshot"

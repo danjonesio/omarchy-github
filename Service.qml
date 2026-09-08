@@ -128,6 +128,15 @@ Item {
         return copy;
     }
 
+    // QML reserves `.id` on objects. JSON notification thread ids must be read
+    // with bracket notation or every bulk snapshot looks empty.
+    function threadId(item) {
+        if (!item)
+            return "";
+        var value = item["id"];
+        return value === undefined || value === null ? "" : String(value);
+    }
+
     function hideNotification(id) {
         var value = String(id || "");
         if (value === "")
@@ -138,7 +147,7 @@ Item {
         var found = false;
         for (var i = 0; i < notifications.length; i++) {
             var item = notifications[i];
-            if (String(item.id || "") === value) {
+            if (threadId(item) === value) {
                 hidden[value] = item;
                 found = true;
             } else {
@@ -146,7 +155,7 @@ Item {
             }
         }
         if (!found && hidden[value] === undefined)
-            hidden[value] = {id: value};
+            hidden[value] = { "id": value };
 
         hiddenNotifications = hidden;
         if (found) {
@@ -165,7 +174,7 @@ Item {
             return ;
 
         for (var i = 0; i < notifications.length; i++) {
-            if (String(notifications[i].id || "") === value)
+            if (threadId(notifications[i]) === value)
                 return ;
         }
         notifications = [item].concat(notifications);
@@ -178,7 +187,7 @@ Item {
         var remaining = [];
         for (var i = 0; i < notifications.length; i++) {
             var item = notifications[i];
-            var id = String(item.id || "");
+            var id = threadId(item);
             if (id !== "") {
                 ids.push(id);
                 hidden[id] = item;
@@ -207,7 +216,7 @@ Item {
         var visible = [];
         for (var i = 0; i < incoming.length; i++) {
             var item = incoming[i];
-            var id = String(item.id || "");
+            var id = threadId(item);
             if (hidden[id])
                 nextHidden[id] = item;
             else
@@ -307,7 +316,7 @@ Item {
         var seen = {};
         var list = rows || [];
         for (var i = 0; i < list.length; i++) {
-            var id = String(list[i].id || "");
+            var id = threadId(list[i]);
             if (!/^\d+$/.test(id))
                 return null;
             if (seen[id])
@@ -318,16 +327,12 @@ Item {
         return ids;
     }
 
-    function markAllSnapshot(ids, revision) {
-        return String(revision) + ":" + ids.join(",");
+    function markAllSnapshot(ids) {
+        return ids.join(",");
     }
 
     function idsFromSnapshot(prepared) {
-        var text = String(prepared || "");
-        var sep = text.indexOf(":");
-        if (sep < 0)
-            return [];
-        var parts = text.substring(sep + 1).split(",");
+        var parts = String(prepared || "").split(",");
         var ids = [];
         for (var i = 0; i < parts.length; i++) {
             if (/^\d+$/.test(parts[i]))
@@ -341,11 +346,6 @@ Item {
     // prepared value before the destructive second click can run. Only these IDs
     // are PATCHed; a last_read_at bulk mark is never used.
     function prepareMarkAllNotificationsRead() {
-        if (loading || fetchProcess.running) {
-            notificationActionStatus = "Wait for GitHub to finish refreshing.";
-            actionStatusTimer.restart();
-            return "";
-        }
         if (markProcess.running) {
             notificationActionStatus = "A mark-as-read is already running.";
             actionStatusTimer.restart();
@@ -360,12 +360,12 @@ Item {
             actionStatusTimer.restart();
             return "";
         }
-        return markAllSnapshot(ids, notificationsRevision);
+        return markAllSnapshot(ids);
     }
 
     function markAllNotificationsRead(prepared) {
         var confirmed = String(prepared || "");
-        if (confirmed === "" || loading || fetchProcess.running || markProcess.running)
+        if (confirmed === "" || markProcess.running)
             return ;
 
         // Recompute immediately before starting. This protects non-panel callers
