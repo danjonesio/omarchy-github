@@ -3,39 +3,19 @@
 # Authentication is delegated entirely to the gh CLI credential store.
 set -uo pipefail
 
-include_archived=false
-include_forks=false
-include_archived_reviews=false
-include_draft_reviews=false
-repository_scope="owned"
-action_scan="recent"
-action_limit=15
+action_scan="watch"
 concurrency=6
-failed_days=7
-failed_limit=20
 mark_notifications=()
 mark_dones=()
 phase="all"
 cache_file=""
+watch_repos=()
 
 usage() {
   cat <<'EOF'
 Usage: omarchy-github-fetch [options]
-  --include-archived BOOL       Include archived repositories (default: false)
-  --include-forks BOOL          Include repositories that are forks (default: false)
-  --include-archived-reviews BOOL
-                                Include review requests and assigned issues in
-                                archived repositories (default: false)
-  --include-draft-reviews BOOL  Include review requests on draft pull requests
-                                (default: false)
-  --repository-scope MODE       owned, or organizations to also list the
-                                repositories you reach through an organization
-                                (default: owned)
-  --action-scan MODE            off, recent, or all (default: recent)
-  --action-repo-limit N         Repositories scanned in recent mode (default: 15)
+  --action-scan MODE            off or watch (default: watch)
   --concurrency N               Concurrent Actions requests, 1-12 (default: 6)
-  --failed-days N               Show failed runs from the last N days, 1-30 (default: 7)
-  --failed-limit N              Maximum recent failed runs, 1-100 (default: 20)
   --mark-notification-read ID   Mark a notification thread read and exit
                                 (repeatable; only the given IDs are patched)
   --mark-notification-done ID   Mark a notification thread done and exit
@@ -43,6 +23,10 @@ Usage: omarchy-github-fetch [options]
   --phase MODE                  all, inbox, or actions (default: all)
   --cache-file PATH             Write the emitted JSON to PATH (inbox creates,
                                 actions merges into an existing file)
+  --watch-repo OWNER/NAME       Repository to scan for Actions (repeatable).
+                                Defaults to omacom/omarchy and
+                                NetCask-Labs/NetCask-commercial, or
+                                actionRepos in ~/.config/omarchy/github.json.
 EOF
 }
 
@@ -51,38 +35,25 @@ integer() { [[ $1 =~ ^[0-9]+$ ]]; }
 
 while (($#)); do
   case "$1" in
-    --include-archived) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_archived=$2; shift 2 ;;
-    --include-forks) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_forks=$2; shift 2 ;;
-    --include-archived-reviews) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_archived_reviews=$2; shift 2 ;;
-    --include-draft-reviews) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_draft_reviews=$2; shift 2 ;;
-    --repository-scope) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; repository_scope=${2,,}; shift 2 ;;
     --action-scan) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; action_scan=${2,,}; shift 2 ;;
-    --action-repo-limit) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; action_limit=$2; shift 2 ;;
     --concurrency) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; concurrency=$2; shift 2 ;;
-    --failed-days) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; failed_days=$2; shift 2 ;;
-    --failed-limit) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; failed_limit=$2; shift 2 ;;
     --mark-notification-read) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_notifications+=("$2"); shift 2 ;;
     --mark-notification-done) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_dones+=("$2"); shift 2 ;;
     --phase) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; phase=${2,,}; shift 2 ;;
     --cache-file) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; cache_file=$2; shift 2 ;;
+    --watch-repo) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; watch_repos+=("$2"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
-integer "$action_limit" && ((action_limit >= 1 && action_limit <= 500)) || { echo "invalid --action-repo-limit" >&2; exit 2; }
 integer "$concurrency" && ((concurrency >= 1 && concurrency <= 12)) || { echo "invalid --concurrency" >&2; exit 2; }
-integer "$failed_days" && ((failed_days >= 1 && failed_days <= 30)) || { echo "invalid --failed-days" >&2; exit 2; }
-integer "$failed_limit" && ((failed_limit >= 1 && failed_limit <= 100)) || { echo "invalid --failed-limit" >&2; exit 2; }
-[[ $action_scan == off || $action_scan == recent || $action_scan == all ]] || { echo "invalid --action-scan" >&2; exit 2; }
-[[ $repository_scope == owned || $repository_scope == organizations ]] || { echo "invalid --repository-scope" >&2; exit 2; }
+# recent/all remain accepted so leftover callers still scan the watch list.
+[[ $action_scan == off || $action_scan == watch || $action_scan == recent || $action_scan == all ]] || { echo "invalid --action-scan" >&2; exit 2; }
 [[ $phase == all || $phase == inbox || $phase == actions ]] || { echo "invalid --phase" >&2; exit 2; }
-# Interpolated into the GraphQL document, so it comes from the validated enum
-# above. The argument itself never reaches the query.
-if [[ $repository_scope == organizations ]]; then owner_affiliations="[OWNER,ORGANIZATION_MEMBER]"; else owner_affiliations="OWNER"; fi
 
 emit_state() {
-  jq -n --arg state "$1" --arg message "$2" --arg scope "$repository_scope" '{schemaVersion:1,state:$state,message:$message,login:"",repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:[],reviewRequests:[],assignedIssues:[],myPullRequests:[],myPullRequestsTotal:0,actions:[],failedActions:[],repositories:[],warnings:[],rateLimit:null}'
+  jq -n --arg state "$1" --arg message "$2" '{schemaVersion:1,state:$state,message:$message,login:"",fetchedAt:(now|todateiso8601),notifications:[],reviewRequests:[],assignedIssues:[],myPullRequests:[],myPullRequestsTotal:0,actions:[],failedActions:[],repositories:[],warnings:[],rateLimit:null}'
 }
 
 command -v jq >/dev/null 2>&1 || { printf '%s\n' '{"schemaVersion":1,"state":"error","message":"jq is required.","notifications":[],"reviewRequests":[],"assignedIssues":[],"myPullRequests":[],"myPullRequestsTotal":0,"actions":[],"failedActions":[],"repositories":[],"warnings":[]}' ; exit 0; }
@@ -90,6 +61,20 @@ command -v jq >/dev/null 2>&1 || { printf '%s\n' '{"schemaVersion":1,"state":"er
 # github.com.evil.com cannot pass. Repo names are the GitHub character set only.
 jq_github_url='def github_url: (if type == "string" then . else "" end) as $u | if ($u | test("(?i)^https://(gist\\.)?github\\.com(/|$)") and (test("[\\s\\\\]") | not)) then $u else "" end; def github_repo: (if type == "string" then . else "" end) as $n | if ($n | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")) then $n else "" end;'
 safe_repo() { [[ $1 =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; }
+if ((${#watch_repos[@]} == 0)); then
+  cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/github.json"
+  if [[ -f $cfg ]]; then
+    mapfile -t watch_repos < <(jq -r '.actionRepos[]? // empty' "$cfg" 2>/dev/null)
+  fi
+fi
+if ((${#watch_repos[@]} == 0)); then
+  watch_repos=(omacom/omarchy NetCask-Labs/NetCask-commercial)
+fi
+resolved_watch=()
+for repo in "${watch_repos[@]}"; do
+  safe_repo "$repo" && resolved_watch+=("$repo")
+done
+watch_repos=("${resolved_watch[@]}")
 if ((${#mark_notifications[@]} > 0)); then
   for id in "${mark_notifications[@]}"; do
     [[ $id =~ ^[0-9]+$ ]] || { jq -n --arg id "$id" '{state:"error",message:"Invalid notification thread id.",notificationId:$id}'; exit 2; }
@@ -254,15 +239,8 @@ fetch_search() {
   else printf '[]\n' >"$output"; fi
 }
 if $fetch_inbox; then
-# An archived repository is read-only, so the request cannot be withdrawn and
-# the work cannot be done: it would otherwise be listed forever.
-if bool "$include_archived_reviews"; then search_archived=""; else search_archived="+archived%3Afalse"; fi
-# Converting a pull request to a draft does not dismiss requests already raised
-# against it, and a CODEOWNERS rule re-raises them, so this filter cannot live
-# on the pull request side.
-if bool "$include_draft_reviews"; then search_draft=""; else search_draft="+draft%3Afalse"; fi
-fetch_search review-requests "is%3Aopen+is%3Apr+review-requested%3A%40me$search_draft$search_archived" "$tmp/reviews.json"
-fetch_search assigned-issues "is%3Aopen+is%3Aissue+assignee%3A%40me$search_archived" "$tmp/issues.json"
+fetch_search review-requests "is%3Aopen+is%3Apr+review-requested%3A%40me+draft%3Afalse+archived%3Afalse" "$tmp/reviews.json"
+fetch_search assigned-issues "is%3Aopen+is%3Aissue+assignee%3A%40me+archived%3Afalse" "$tmp/issues.json"
 
 # Authored pull requests come from GraphQL rather than the search endpoint so
 # the head commit's check rollup arrives with them. The search API carries no
@@ -270,8 +248,7 @@ fetch_search assigned-issues "is%3Aopen+is%3Aissue+assignee%3A%40me$search_archi
 # Sorted server-side so that if an account exceeds the page size, what survives
 # is the most recently touched work rather than an arbitrary slice. issueCount
 # carries the real total so the panel can say it is showing a subset.
-my_pr_search="is:open is:pr author:@me sort:updated-desc"
-bool "$include_archived" || my_pr_search+=" archived:false"
+my_pr_search="is:open is:pr author:@me sort:updated-desc archived:false"
 printf '[]\n' >"$tmp/mypulls.json"
 printf '0\n' >"$tmp/mypulls-total.json"
 if my_pulls=$(gh api graphql -f query='query($search:String!) { search(query:$search,type:ISSUE,first:50) { issueCount nodes { ... on PullRequest { number title url updatedAt isDraft repository { nameWithOwner } commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } } } }' -F search="$my_pr_search" 2>"$tmp/mypulls.err"); then
@@ -294,87 +271,53 @@ else
   printf '0\n' >"$tmp/mypulls-total.json"
 fi
 
-if ! $fetch_actions; then
-  [[ -n ${login:-} ]] || login=$(gh api user -q .login 2>/dev/null || true)
-  printf '[]\n' >"$tmp/repos.json"
-  printf '[]\n' >"$tmp/actions.json"
-  printf '[]\n' >"$tmp/failed.json"
-  printf 'null\n' >"$tmp/rate.json"
-  graphql_ok=true
-else
-cursor=null
+[[ -n ${login:-} ]] || login=$(gh api user -q .login 2>/dev/null || true)
 printf '[]\n' >"$tmp/repos.json"
-graphql_ok=true
-while :; do
-  if ! page=$(gh api graphql -f query='query($cursor:String) { viewer { login repositories(first:100,after:$cursor,ownerAffiliations:'"$owner_affiliations"',orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { name nameWithOwner url isArchived isFork stargazerCount updatedAt issues(states:OPEN){totalCount} pullRequests(states:OPEN){totalCount} } pageInfo { hasNextPage endCursor } } } rateLimit { remaining resetAt cost } }' -F cursor="$cursor" 2>"$tmp/graphql.err"); then api_error repositories "$tmp/graphql.err"; graphql_ok=false; break; fi
-  printf '%s\n' "$page" >"$tmp/page.json"
-  login=$(jq -r '.data.viewer.login // ""' "$tmp/page.json")
-  jq "$jq_github_url"'[.data.viewer.repositories.nodes[] | select((.nameWithOwner // "") | github_repo != "") |
-    {name,nameWithOwner:((.nameWithOwner) | github_repo),url:((.url // "") | github_url),archived:.isArchived,fork:.isFork,stars:.stargazerCount,issues:.issues.totalCount,prs:.pullRequests.totalCount,updatedAt,activeActions:0}]' "$tmp/page.json" >"$tmp/page.repos"
-  jq -s '.[0]+.[1]' "$tmp/repos.json" "$tmp/page.repos" >"$tmp/repos.next" && mv "$tmp/repos.next" "$tmp/repos.json"
-  jq '.data.rateLimit // null' "$tmp/page.json" >"$tmp/rate.json"
-  [[ $(jq -r '.data.viewer.repositories.pageInfo.hasNextPage // false' "$tmp/page.json") == true ]] || break
-  cursor=$(jq -r '.data.viewer.repositories.pageInfo.endCursor // empty' "$tmp/page.json")
-  [[ -n $cursor ]] || { printf '%s\n' 'repositories: pagination cursor missing' >>"$warnings"; graphql_ok=false; break; }
-done
-[[ -f $tmp/rate.json ]] || printf 'null\n' >"$tmp/rate.json"
-if bool "$include_archived"; then archived_filter=true; else archived_filter=false; fi
-if bool "$include_forks"; then fork_filter=true; else fork_filter=false; fi
-jq --argjson archived "$archived_filter" --argjson forks "$fork_filter" '[.[]|select(($archived or (.archived|not)) and ($forks or (.fork|not)))]' "$tmp/repos.json" >"$tmp/repos.filtered" && mv "$tmp/repos.filtered" "$tmp/repos.json"
-
-# Active states are queried independently and paginated so a busy repository
-# cannot hide a queued run behind 100 completed runs. Completed runs are
-# server-bounded by the configured date window and paginated, which keeps the
-# request count proportional to relevant history rather than all-time history.
-printf '[]\n' >"$tmp/actions.json"; printf '[]\n' >"$tmp/failed.json"
-if [[ $action_scan != off && $(jq 'length' "$tmp/repos.json") -gt 0 ]]; then
-  if [[ $action_scan == recent ]]; then jq -r --argjson limit "$action_limit" 'sort_by(.updatedAt)|reverse|.[:$limit]|.[].nameWithOwner|select(test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"))' "$tmp/repos.json" >"$tmp/scan-repos"; else jq -r '.[].nameWithOwner|select(test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"))' "$tmp/repos.json" >"$tmp/scan-repos"; fi
-  cutoff_epoch=$(date -u -d "-$failed_days days" +%s)
-  cutoff_date=$(date -u -d "-$failed_days days" +%Y-%m-%d)
+printf '[]\n' >"$tmp/actions.json"
+printf '[]\n' >"$tmp/failed.json"
+printf 'null\n' >"$tmp/rate.json"
+if $fetch_actions && [[ $action_scan != off && ${#watch_repos[@]} -gt 0 ]]; then
+  printf '%s\n' "${watch_repos[@]}" >"$tmp/scan-repos"
+  jq -n --args '$ARGS.positional | map({nameWithOwner:., url:("https://github.com/" + .)})' -- "${watch_repos[@]}" >"$tmp/repos.json"
   scan_one() {
     local repo=$1 key prefix status failed=false
     safe_repo "$repo" || return 0
     key=$(printf '%s' "$repo"|sha256sum|cut -d' ' -f1); prefix="$tmp/action-$key"
     : >"$prefix.active.pages"; : >"$prefix.completed.pages"; : >"$prefix.err"
     for status in in_progress queued waiting requested pending; do
-      if ! gh api --paginate -H 'Accept: application/vnd.github+json' "/repos/$repo/actions/runs?status=$status&per_page=100" >>"$prefix.active.pages" 2>>"$prefix.err"; then failed=true; fi
+      if ! gh api -H 'Accept: application/vnd.github+json' "/repos/$repo/actions/runs?status=$status&per_page=20" >>"$prefix.active.pages" 2>>"$prefix.err"; then failed=true; fi
     done
-    if ! gh api --paginate -H 'Accept: application/vnd.github+json' "/repos/$repo/actions/runs?status=completed&created=%3E%3D$cutoff_date&per_page=100" >"$prefix.completed.pages" 2>>"$prefix.err"; then failed=true; fi
-    jq -s --arg repo "$repo" "$jq_github_url"'[.[]|.workflow_runs[]?|select(.status=="in_progress" or .status=="queued" or .status=="waiting" or .status=="requested" or .status=="pending")|{id,repository:$repo,name:(.name // .display_title // "Workflow"),title:(.display_title // ""),status:(.status // ""),conclusion:(.conclusion // ""),event:(.event // ""),branch:(.head_branch // ""),url:((.html_url // "") | github_url),createdAt:(.created_at // ""),updatedAt:(.updated_at // "")}]|unique_by(.id)' "$prefix.active.pages" >"$prefix.active.json" 2>/dev/null || printf '[]\n' >"$prefix.active.json"
-    jq -s --arg repo "$repo" "$jq_github_url"'[.[]|.workflow_runs[]?|select(.status=="completed")|{id,repository:$repo,name:(.name // .display_title // "Workflow"),title:(.display_title // ""),status:(.status // ""),conclusion:(.conclusion // ""),event:(.event // ""),branch:(.head_branch // ""),url:((.html_url // "") | github_url),createdAt:(.created_at // ""),updatedAt:(.updated_at // "")}]|unique_by(.id)' "$prefix.completed.pages" >"$prefix.completed.json" 2>/dev/null || printf '[]\n' >"$prefix.completed.json"
+    if ! gh api -H 'Accept: application/vnd.github+json' "/repos/$repo/actions/runs?status=completed&per_page=10" >"$prefix.completed.pages" 2>>"$prefix.err"; then failed=true; fi
+    jq -s --arg repo "$repo" "$jq_github_url"'[.[]|.workflow_runs[]?|select(.status=="in_progress" or .status=="queued" or .status=="waiting" or .status=="requested" or .status=="pending")|{id,repository:$repo,name:(.name // .display_title // "Workflow"),title:(.display_title // ""),status:(.status // ""),conclusion:(.conclusion // ""),event:(.event // ""),branch:(.head_branch // ""),url:((.html_url // "") | github_url),createdAt:(.created_at // ""),updatedAt:(.updated_at // ""),job:"",step:"",jobs:[]}]|unique_by(.id)' "$prefix.active.pages" >"$prefix.active.json" 2>/dev/null || printf '[]\n' >"$prefix.active.json"
+    jq -s --arg repo "$repo" "$jq_github_url"'[.[]|.workflow_runs[]?|select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="action_required" or .conclusion=="startup_failure")|{id,repository:$repo,name:(.name // .display_title // "Workflow"),title:(.display_title // ""),status:(.status // ""),conclusion:(.conclusion // ""),event:(.event // ""),branch:(.head_branch // ""),url:((.html_url // "") | github_url),createdAt:(.created_at // ""),updatedAt:(.updated_at // "")}]|unique_by(.id)|sort_by(.updatedAt)|reverse|.[0:1]' "$prefix.completed.pages" >"$prefix.completed.json" 2>/dev/null || printf '[]\n' >"$prefix.completed.json"
     if [[ $failed == true ]]; then api_error "actions $repo" "$prefix.err"; fi
   }
-  export tmp warnings cutoff_date jq_github_url; export -f scan_one api_error error_detail safe_repo
+  export tmp warnings jq_github_url; export -f scan_one api_error error_detail safe_repo
   xargs -r -P "$concurrency" -I{} bash -c 'scan_one "$1"' _ {} <"$tmp/scan-repos"
   jq -s 'add // []|unique_by(.id)|sort_by(.createdAt)|reverse' "$tmp"/action-*.active.json >"$tmp/actions.json" 2>/dev/null || printf '[]\n' >"$tmp/actions.json"
-  jq -s --argjson cutoff "$cutoff_epoch" --argjson limit "$failed_limit" 'add // []|[.[]|select((.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="action_required" or .conclusion=="startup_failure") and ((.createdAt|fromdateiso8601) >= $cutoff))]|unique_by(.id)|sort_by(.updatedAt)|reverse|.[:$limit]' "$tmp"/action-*.completed.json >"$tmp/failed.json" 2>/dev/null || printf '[]\n' >"$tmp/failed.json"
-  jq --slurpfile actions "$tmp/actions.json" 'map(. as $repo|.activeActions=([$actions[0][]|select(.repository==$repo.nameWithOwner)]|length))' "$tmp/repos.json" >"$tmp/repos.next" && mv "$tmp/repos.next" "$tmp/repos.json"
+  jq -s 'add // []|unique_by(.id)|sort_by(.updatedAt)|reverse' "$tmp"/action-*.completed.json >"$tmp/failed.json" 2>/dev/null || printf '[]\n' >"$tmp/failed.json"
   if [[ -s $tmp/actions.json && $(jq 'length' "$tmp/actions.json") -gt 0 ]]; then
-    jq -r '.[] | select(.status=="in_progress") | select(.id != null) | (.repository|tostring) + "\t" + (.id|tostring)' "$tmp/actions.json" | head -20 >"$tmp/job-runs"
+    jq -r '.[] | select(.status=="in_progress" or .status=="queued") | select(.id != null) | (.repository|tostring) + "\t" + (.id|tostring)' "$tmp/actions.json" | head -20 >"$tmp/job-runs"
     : >"$tmp/jobmeta.jsonl"
     while IFS=$'\t' read -r repo run; do
       [[ $run =~ ^[0-9]+$ ]] || continue
       safe_repo "$repo" || continue
       if jobs_json=$(gh api -H 'Accept: application/vnd.github+json' "/repos/$repo/actions/runs/$run/jobs?per_page=100" 2>>"$tmp/jobs.err"); then
-        printf '%s\n' "$jobs_json" | jq -c --arg repo "$repo" --argjson run "$run" '{id:$run,repository:$repo,job:(([.jobs[]? | select(.status=="in_progress" or .status=="queued" or .status=="waiting")][0].name) // ""),step:(([.jobs[]? | select(.status=="in_progress") | (.steps // [])[] | select(.status=="in_progress")][0].name) // "")}' >>"$tmp/jobmeta.jsonl"
+        printf '%s\n' "$jobs_json" | jq -c --argjson run "$run" --arg repo "$repo" '{id:$run,repository:$repo,job:(([.jobs[]? | select(.status=="in_progress" or .status=="queued" or .status=="waiting")][0].name) // ""),step:(([.jobs[]? | select(.status=="in_progress") | (.steps // [])[] | select(.status=="in_progress")][0].name) // ""),jobs:([.jobs[]? | {name:(.name // "job"),status:(.status // ""),conclusion:(.conclusion // "")}])}' >>"$tmp/jobmeta.jsonl"
       fi
     done < "$tmp/job-runs"
     if [[ -s $tmp/jobmeta.jsonl ]]; then
       jq -s '.' "$tmp/jobmeta.jsonl" >"$tmp/jobmeta.json"
-      jq --slurpfile meta "$tmp/jobmeta.json" '($meta[0] // []) as $m | map(. as $a | ($m | map(select((.id|tostring) == ($a.id|tostring) and .repository == $a.repository))[0] // {}) as $hit | . + {job:($hit.job // ""), step:($hit.step // "")})' "$tmp/actions.json" >"$tmp/actions.jobs" && mv "$tmp/actions.jobs" "$tmp/actions.json"
-    else
-      jq 'map(. + {job:"", step:""})' "$tmp/actions.json" >"$tmp/actions.jobs" && mv "$tmp/actions.jobs" "$tmp/actions.json"
+      jq --slurpfile meta "$tmp/jobmeta.json" '($meta[0] // []) as $m | map(. as $a | ($m | map(select((.id|tostring) == ($a.id|tostring) and .repository == $a.repository))[0] // {}) as $hit | . + {job:($hit.job // ""), step:($hit.step // ""), jobs:($hit.jobs // [])})' "$tmp/actions.json" >"$tmp/actions.jobs" && mv "$tmp/actions.jobs" "$tmp/actions.json"
     fi
   fi
 fi
-fi
 
 warnings_json=$(sort -u "$warnings"|jq -Rsc 'split("\n")|map(select(length>0))')
-repo_count=$(jq 'length' "$tmp/repos.json")
-if [[ $graphql_ok == false && $repo_count -eq 0 && $phase != inbox ]]; then state=error; message="GitHub repositories could not be loaded."; else state=ready; message=""; fi
-rate_remaining=$(jq -r '.remaining // 999999' "$tmp/rate.json")
-if { [[ $rate_remaining =~ ^[0-9]+$ ]] && ((rate_remaining<=0)); } || grep -qiE 'rate.?limit|secondary rate' "$warnings"; then state=rate-limited; message="GitHub API rate limit reached."; fi
-json=$(jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --arg phase "$phase" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,phase:$phase,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],warnings:$warnings,rateLimit:$rate[0]}')
+state=ready
+message=""
+if grep -qiE 'rate.?limit|secondary rate' "$warnings"; then state=rate-limited; message="GitHub API rate limit reached."; fi
+json=$(jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg phase "$phase" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,phase:$phase,state:$state,message:$message,login:$login,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],warnings:$warnings,rateLimit:$rate[0]}')
 printf '%s\n' "$json"
 if [[ -n $cache_file ]]; then
   mkdir -p "$(dirname "$cache_file")"

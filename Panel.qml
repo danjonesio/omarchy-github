@@ -23,7 +23,6 @@ Panel {
   property bool myPullsExpanded: false
   property bool issuesExpanded: false
   property bool actionsExpanded: false
-  property bool failuresExpanded: false
   // settingsOpen is the page on screen; pendingSettingsOpen is the page the
   // in-flight flip will land on, since the swap happens edge-on at 90 degrees.
   property bool settingsOpen: false
@@ -45,6 +44,7 @@ Panel {
   property real wheelAccumulator: 0
   readonly property int activityPreviewCount: 5
   readonly property int activityExpandedCount: 25
+  readonly property int notificationPageSize: 20
   readonly property var cursorTargets: buildCursorTargets()
   readonly property var selectedTarget: cursorTargets.length > 0 ? cursorTargets[Math.max(0, Math.min(cursorIndex, cursorTargets.length - 1))] : null
 
@@ -53,14 +53,14 @@ Panel {
   }
 
   function notificationPageCount() {
-    return Math.max(1, Math.ceil(github.notifications.length / activityPreviewCount))
+    return Math.max(1, Math.ceil(github.notifications.length / notificationPageSize))
   }
 
   function notificationRows() {
     var page = Math.max(0, Math.min(notificationsPage, notificationPageCount() - 1))
     if (page !== notificationsPage) notificationsPage = page
-    var start = page * activityPreviewCount
-    return github.notifications.slice(start, start + activityPreviewCount)
+    var start = page * notificationPageSize
+    return github.notifications.slice(start, start + notificationPageSize)
   }
 
   function buildCursorTargets() {
@@ -73,7 +73,6 @@ Panel {
     add("mypull", sectionRows(github.myPullRequests, myPullsExpanded))
     add("issue", sectionRows(github.assignedIssues, issuesExpanded))
     add("action", sectionRows(github.actions, actionsExpanded))
-    add("failure", sectionRows(github.failedActions, failuresExpanded))
     return targets
   }
 
@@ -263,7 +262,12 @@ Panel {
         actionStatus: github.notificationActionStatus,
         actionEnabled: notificationsSection ? notificationsSection.actionEnabled : false,
         actionArmed: notificationsSection ? notificationsSection.actionArmed : false,
-        actionBusy: notificationsSection ? notificationsSection.actionBusy : false
+        actionBusy: notificationsSection ? notificationsSection.actionBusy : false,
+        actionCount: github.actions.length,
+        failedCount: github.failedActions.length,
+        firstAction: github.actions.length > 0 ? (github.actions[0].repository + " " + github.actions[0].name + " " + (github.actions[0].job || "") + " " + (github.actions[0].step || "")) : "",
+        lastFailure: github.failedActions.length > 0 ? (github.failedActions[0].repository + " " + github.failedActions[0].name) : "",
+        pageSize: root.notificationPageSize
       })
     }
     function clickMarkAll(): string {
@@ -550,25 +554,22 @@ Panel {
             delegateComponent: actionDelegate
           }
 
-          DashboardSection {
-            visible: count > 0
-            title: "RECENT FAILED ACTIONS"
-            count: github.failedActions.length
-            model: root.sectionRows(github.failedActions, root.failuresExpanded)
-            expanded: root.failuresExpanded
-            onToggleExpanded: root.failuresExpanded = !root.failuresExpanded
-            delegateComponent: failedActionDelegate
-          }
-
           Text {
-            visible: github.rateLimit && github.rateLimit.remaining !== undefined
+            visible: github.actions.length === 0 && github.failedActions.length > 0
             width: parent.width
-            text: "API requests remaining: " + (github.rateLimit ? github.rateLimit.remaining : "") +
-              (github.fetchedAt !== "" ? " · updated " + root.relativeTime(github.fetchedAt) : "")
-            color: root.dim
+            text: "Last failure · " + github.failedActions[0].name + " · " + github.failedActions[0].repository +
+              (github.failedActions[0].updatedAt ? " · " + root.relativeTime(github.failedActions[0].updatedAt) : "")
+            textFormat: Text.PlainText
+            color: root.urgent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.openUrl(github.failedActions[0].url)
+            }
           }
         }
       }
@@ -706,7 +707,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Actions scanning still runs in the background after the inbox loads."
+              text: "Actions watch omacom/omarchy and NetCask-Labs/NetCask-commercial. Inbox loads first; running jobs fill in after. Edit ~/.config/omarchy/github.json to change the watch list."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -749,9 +750,6 @@ Panel {
       rowId: String(modelData.id || modelData.url || index)
       glyph: ""
       title: modelData.title
-      // Drafts only appear here when the setting is on, and the reason to turn
-      // it on is knowing which requests are early feedback rather than a real
-      // review, so the row has to say which it is.
       detail: modelData.repository + (modelData.draft ? " · draft" : "") + " · review requested · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
     }
@@ -808,31 +806,30 @@ Panel {
       glyph: "󰑮"
       title: modelData.name
       detail: {
-        var parts = [modelData.repository, modelData.status]
-        if (modelData.job) parts.push(modelData.job)
-        if (modelData.step) parts.push(modelData.step)
+        var parts = [modelData.repository]
+        var jobs = modelData.jobs
+        if (jobs && jobs.length) {
+          for (var i = 0; i < jobs.length; i++) {
+            var job = jobs[i]
+            var mark = "○"
+            var st = String(job.status || "")
+            var con = String(job.conclusion || "")
+            if (st === "in_progress" || st === "queued" || st === "waiting") mark = "●"
+            else if (con === "success") mark = "✓"
+            else if (con === "failure" || con === "timed_out" || con === "cancelled") mark = "✗"
+            parts.push(String(job.name || "job") + " " + mark)
+          }
+          if (modelData.step) parts.push(modelData.step)
+        } else {
+          parts.push(modelData.status)
+          if (modelData.job) parts.push(modelData.job)
+          if (modelData.step) parts.push(modelData.step)
+        }
         if (modelData.branch) parts.push(modelData.branch)
         return parts.join(" · ")
       }
       url: modelData.url
       pulse: true
-    }
-  }
-
-  Component {
-    id: failedActionDelegate
-    LinkRow {
-      required property var modelData
-      required property int index
-      width: parent ? parent.width : 0
-      rowKind: "failure"
-      rowIndex: index
-      rowId: String(modelData.id || modelData.url || index)
-      glyph: "󰅖"
-      title: modelData.name
-      detail: modelData.repository + " · " + modelData.conclusion + " · " + root.relativeTime(modelData.updatedAt)
-      url: modelData.url
-      danger: true
     }
   }
 

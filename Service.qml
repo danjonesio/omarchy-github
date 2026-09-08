@@ -13,7 +13,6 @@ Item {
     property string state: "loading"
     property string message: "Loading GitHub…"
     property string login: ""
-    property string fetchedRepositoryScope: "owned"
     property string fetchedAt: ""
     property string actionsFetchedAt: ""
     property var notifications: []
@@ -100,24 +99,6 @@ Item {
         return text === "true" || text === "yes" || text === "on" || text === "1";
     }
 
-    // Matched against the known options rather than by substring, so an option
-    // added later falls back to the narrower scope instead of silently widening
-    // it. `fetchedRepositoryScope` reports what the last payload contained.
-    function repositoryMode() {
-        return String(setting("repositoryScope", "Owned")).toLowerCase() === "owned and organizations" ? "organizations" : "owned";
-    }
-
-    function actionMode() {
-        var value = String(setting("actionScanBehavior", "Recent repositories")).toLowerCase();
-        if (value === "off")
-            return "off";
-
-        if (value === "all repositories")
-            return "all";
-
-        return "recent";
-    }
-
     function helperPath() {
         return decodeURIComponent(Qt.resolvedUrl("omarchy-github-fetch").toString().replace(/^file:\/\//, ""));
     }
@@ -139,9 +120,14 @@ Item {
         return (Date.now() - t) < 60000;
     }
 
+    readonly property var actionWatchRepos: ["omacom/omarchy", "NetCask-Labs/NetCask-commercial"]
+
     function command(phase) {
         var p = phase || "all";
-        return [helperPath(), "--phase", p, "--cache-file", cachePath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
+        var cmd = [helperPath(), "--phase", p, "--cache-file", cachePath(), "--concurrency", "6"];
+        for (var i = 0; i < actionWatchRepos.length; i++)
+            cmd.push("--watch-repo", actionWatchRepos[i]);
+        return cmd;
     }
 
     function copyMap(value) {
@@ -307,7 +293,7 @@ Item {
     function refresh(force) {
         var forced = force === true;
         if (!forced && isFresh()) {
-            if (actionMode() !== "off" && actionsFetchedAt === "" && !actionsLoading && !fetchProcess.running)
+            if (actionsFetchedAt === "" && !actionsLoading && !fetchProcess.running)
                 startPhase("actions", false);
             return ;
         }
@@ -327,7 +313,6 @@ Item {
             message = String(data.message || "");
             if (String(data.login || "") !== "")
                 login = String(data.login);
-            fetchedRepositoryScope = String(data.repositoryScope || fetchedRepositoryScope || "owned");
             if (phase !== "actions")
                 fetchedAt = String(data.fetchedAt || fetchedAt);
             if (phase !== "inbox")
@@ -478,6 +463,16 @@ Item {
     }
 
     Timer {
+        interval: 25000
+        repeat: true
+        running: root.actionCount > 0
+        onTriggered: {
+            if (!fetchProcess.running && !markProcess.running)
+                root.startPhase("actions", false);
+        }
+    }
+
+    Timer {
         id: actionStatusTimer
 
         interval: 3000
@@ -524,7 +519,7 @@ Item {
             if (phase === "inbox") {
                 root.loading = false;
                 root.inboxLoading = false;
-                if (root.followUpActions && root.actionMode() !== "off") {
+                if (root.followUpActions) {
                     root.startPhase("actions", false);
                     return ;
                 }

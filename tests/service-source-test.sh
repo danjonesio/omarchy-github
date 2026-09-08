@@ -8,25 +8,31 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_contains() {
   [[ $SERVICE_SOURCE == *"$1"* ]] || fail "$2"
 }
-assert_contains 'String(setting("repositoryScope", "Owned")).toLowerCase() === "owned and organizations" ? "organizations" : "owned"' \
-  "an unrecognised repository scope no longer falls back to the narrower one"
-assert_contains '"--repository-scope", repositoryMode()' \
-  "the repository scope setting is not passed to the helper"
-assert_contains 'fetchedRepositoryScope = String(data.repositoryScope || fetchedRepositoryScope || "owned");' \
-  "the panel cannot tell which scope the payload was fetched with"
-assert_contains 'readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || failingPullRequestCount > 0)' \
-  "running Actions still lights the bar icon"
-assert_contains $'if (value === "all repositories")\n            return "all";' \
-  "the full Actions scan does not require an exact setting match"
-
 assert_not_contains() {
   [[ $SERVICE_SOURCE != *"$1"* ]] || fail "$2"
 }
 
-assert_contains $'function refresh(force) {\n        var forced = force === true;\n        if (!forced && isFresh()) {\n            if (actionMode() !== "off" && actionsFetchedAt === "" && !actionsLoading && !fetchProcess.running)\n                startPhase("actions", false);\n            return ;\n        }\n        if (fetchProcess.running || markProcess.running || markQueue.length > 0) {\n            refreshQueued = true;\n            return ;\n        }' \
+assert_contains 'readonly property var actionWatchRepos: ["omacom/omarchy", "NetCask-Labs/NetCask-commercial"]' \
+  "Actions are not pinned to omarchy and NetCask"
+assert_contains 'cmd.push("--watch-repo", actionWatchRepos[i]);' \
+  "the helper is not given the watch list"
+assert_contains '"--concurrency", "6"' \
+  "Actions concurrency is not passed to the helper"
+assert_not_contains '--repository-scope' \
+  "the dropped repository scope is still passed to the helper"
+assert_not_contains 'function repositoryMode()' \
+  "repositoryMode is still in the service"
+assert_not_contains 'function actionMode()' \
+  "actionMode is still in the service"
+assert_contains 'readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || failingPullRequestCount > 0)' \
+  "running Actions still lights the bar icon"
+
+assert_contains $'function refresh(force) {\n        var forced = force === true;\n        if (!forced && isFresh()) {\n            if (actionsFetchedAt === "" && !actionsLoading && !fetchProcess.running)\n                startPhase("actions", false);\n            return ;\n        }\n        if (fetchProcess.running || markProcess.running || markQueue.length > 0) {\n            refreshQueued = true;\n            return ;\n        }' \
   "refresh and notification marking are not serialized"
 assert_contains 'startPhase("inbox", true)' \
   "refresh does not load the inbox before Actions"
+assert_contains $'interval: 25000\n        repeat: true\n        running: root.actionCount > 0' \
+  "running Actions are not polled while live"
 assert_contains $'notifications = visibleNotifications(data.notifications);\n                notificationsRevision++;' \
   "notification refreshes do not invalidate prepared confirmations"
 assert_contains $'hideNotification(value);\n        enqueueMark(value, "read");\n        startQueuedMark();' \

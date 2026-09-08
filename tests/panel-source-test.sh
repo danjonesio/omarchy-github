@@ -79,8 +79,20 @@ assert_contains $'borderSpec: Border.none()\n\n      HoverHandler {\n        onH
   "notification read target does not use a left-only divider"
 assert_contains $'enabled: github.markingNotificationId !== linkRow.notificationId\n          iconText: github.markingNotificationId === linkRow.notificationId && github.markingMode !== "done" ? "󰑐" : "󰄬"' \
   "notification read target does not fill its action strip"
+assert_contains 'readonly property int notificationPageSize: 20' \
+  "notifications are still shown five at a time"
 assert_contains $'function notificationRows() {\n    var page = Math.max(0, Math.min(notificationsPage, notificationPageCount() - 1))' \
-  "notifications are not paged in five-item windows"
+  "notifications are not paged"
+assert_contains $'if (st === "in_progress" || st === "queued" || st === "waiting") mark = "●"' \
+  "running Actions do not show the job pipeline"
+assert_contains 'Last failure · ' \
+  "the last failure caption is missing"
+assert_not_contains 'id: failedActionDelegate' \
+  "the failed-actions graveyard is still in the panel"
+assert_not_contains "RECENT FAILED ACTIONS" \
+  "the failed-actions section is still in the panel"
+assert_not_contains 'github.rateLimit' \
+  "the rate-limit footer is still in the panel"
 assert_contains $'onPreviousPage: root.notificationsPage = Math.max(0, root.notificationsPage - 1)\n            onNextPage: root.notificationsPage = Math.min(root.notificationPageCount() - 1, root.notificationsPage + 1)' \
   "notification page controls do not clamp their range"
 assert_contains $'model: root.notificationRows()\n            showExpansionControl: false\n            footerButtonsBordered: true\n            page: root.notificationsPage' \

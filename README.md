@@ -12,12 +12,11 @@ This is a fork of [robzolkos/omarchy-github](https://github.com/robzolkos/omarch
 
 The dashboard is ordered by urgency so the most actionable work appears first:
 
-- **Unread notifications** — open the related thread, mark it read in place, or clear the whole list
+- **Unread notifications** — up to 20 rows at a time; open the thread, mark it read, or mark it Done
 - **Review requests** — see pull requests waiting on your review
 - **My pull requests** — track the pull requests you opened and the state of their checks
 - **Assigned issues** — keep track of open issues assigned to you
-- **Active GitHub Actions** — monitor queued, pending, requested, waiting, and running workflows
-- **Recent workflow failures** — jump directly to failed, timed-out, or action-required runs
+- **Running Actions** — pinned to omarchy and NetCask; live rows show the job pipeline (`Setup ✓ · Build ● · Test ○`) and current step
 
 ## Highlights
 
@@ -27,7 +26,7 @@ The dashboard is ordered by urgency so the most actionable work appears first:
 - One-click notification mark-as-read, confirmed by GitHub before removal
 - Bulk mark-as-read behind a confirmation step, PATCHing only the confirmed thread IDs
 - Complete paginated notification fetching
-- Configurable Actions scanning with bounded concurrency
+- Actions scanning pinned to a short watch list, with bounded concurrency
 - Graceful partial results when an endpoint or repository is unavailable
 - Explicit logged-out, rate-limited, missing CLI, loading, and error states
 - Mouse and keyboard navigation throughout
@@ -136,51 +135,29 @@ omarchy plugin remove io.github.danjonesio.github
 
 Rows open through `omarchy-launch-webapp` by default, so GitHub gets a dedicated app window rather than a tab in an already-crowded browser. That helper targets Chromium-based default browsers and falls back to `chromium.desktop`; if you have no Chromium-based browser, switch **Open links** to **Browser tab** and rows open through `xdg-open` using your default URL handler instead. This also lets a workspace-aware browser launcher choose the destination without a separate focus command switching workspaces first.
 
-Activity sections show five items initially and expand to a bounded list of 25. **Open in GitHub** takes you to the corresponding complete GitHub view where one is available.
+Notifications show 20 rows per page. Other activity sections show five items initially and expand to a bounded list of 25. **Open in GitHub** takes you to the corresponding complete GitHub view where one is available. When nothing is running, a last-failure caption links to the most recent failed watch-list run.
 
 The notifications footer also carries **Mark all read**. The first click captures the displayed notification IDs and changes the label to **Confirm?**; only the second click sends the request. Each confirmed thread is marked with `PATCH /notifications/threads/:id`. Threads that never appeared in the panel are left unread. The confirmation lapses after a few seconds, when the panel closes, when a refresh changes the notification list, and whenever another mark is running. The dashboard refreshes from GitHub after every attempt; large inboxes processed asynchronously may briefly retain threads that are already on their way out.
 
 ## Settings
 
-**Open links** and **Refresh interval** are editable in the panel through the gear button. Changes are written to the widget's entry in `shell.json` and apply immediately. Actions scanning and review filters stay in Omarchy's bar widget settings. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old.
-
-Configure the widget through Omarchy's bar widget settings. Existing installations retain the narrower repository scope and bounded Actions scan:
+**Open links** and **Refresh interval** are editable in the panel through the gear button. Changes are written to the widget's entry in `shell.json` and apply immediately. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old. While a watch-list run is live, Actions are polled about every 25 seconds.
 
 | Setting | Default |
 | --- | --- |
 | Refresh interval | 900 seconds (15 minutes) |
 | Open links | **Web app window** |
-| Include archived repositories | Off |
-| Include forks | Off |
-| Repository scope | **Owned** |
-| Include review requests and issues from archived repositories | Off |
-| Include review requests on drafts | Off |
-| Actions scan | **Recent repositories** |
-| Recent repository scan limit | 15 |
-| Actions request concurrency | 6 |
-| Failed Actions window | 7 days |
-| Maximum failed Actions | 20 |
-| Keep the bar icon unlit | Off |
 
-**Repository scope** controls which repositories are candidates for Actions scanning. **Owned and organizations** is opt-in. With the default **Recent repositories** scan, Actions requests remain capped to the 15 most recently updated repositories in that wider scope.
+Actions are pinned to `omacom/omarchy` and `NetCask-Labs/NetCask-commercial`. Override the list in `~/.config/omarchy/github.json`:
 
-**All repositories** is also opt-in and starts six paginated Actions request streams per repository on every refresh. Combining it with **Owned and organizations** can consume substantial GitHub API capacity in large organizations. Use **Recent repositories** or **Off** for a bounded scan, and increase the refresh interval when broader monitoring is required.
-
-Set these options from the command line after installing the plugin:
-
-```bash
-omarchy bar set io.github.danjonesio.github repositoryScope "Owned and organizations"
-omarchy bar set io.github.danjonesio.github actionScanBehavior "Recent repositories"
+```json
+{
+  "actionRepos": [
+    "omacom/omarchy",
+    "NetCask-Labs/NetCask-commercial"
+  ]
+}
 ```
-
-Restore the narrowest behavior with:
-
-```bash
-omarchy bar set io.github.danjonesio.github repositoryScope "Owned"
-omarchy bar set io.github.danjonesio.github actionScanBehavior "Off"
-```
-
-Review requests and assigned issues from archived repositories are hidden by default because archived repositories are read-only. Review requests on draft pull requests are also hidden by default, while teams that use drafts for early feedback can include them. Each behavior has its own setting.
 
 ## Local development
 
@@ -205,18 +182,16 @@ The shell watches local plugin files, making QML iteration fast.
 
 `Service.qml` schedules an executable helper, `omarchy-github-fetch`, which calls GitHub exclusively through `gh api` and processes responses with `jq`.
 
-- GraphQL retrieves repositories in the configured scope as candidates for Actions scanning.
-- REST retrieves notifications and workflow runs.
+- REST retrieves notifications and workflow runs on the watch list.
 - GitHub issue search retrieves review requests and assigned issues.
 - GraphQL search retrieves your authored pull requests together with the head commit's `statusCheckRollup`, so check state costs no extra request.
-- Status-specific, paginated Actions requests prevent busy repositories from hiding active runs.
-- Completed runs are server-bounded to the configured failure window.
+- Live runs fetch jobs so the panel can show the pipeline stage.
 - Independent requests allow successful sections to remain available when one endpoint fails.
 
 Run the helper directly to inspect its JSON output:
 
 ```bash
-./omarchy-github-fetch --action-scan recent --action-repo-limit 15 | jq
+./omarchy-github-fetch --watch-repo omacom/omarchy --phase all | jq
 ```
 
 ## License

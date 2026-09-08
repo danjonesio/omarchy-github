@@ -9,16 +9,20 @@ assert_jq() { jq -e "$1" <<<"$2" >/dev/null || fail "$3"; }
 bash -n "$HELPER"
 "$HELPER" --help >/dev/null
 if "$HELPER" --action-scan invalid >/dev/null 2>&1; then fail "invalid scan mode succeeded"; fi
-if "$HELPER" --repository-scope invalid >/dev/null 2>&1; then fail "invalid repository scope succeeded"; fi
-if "$HELPER" --failed-days 0 >/dev/null 2>&1; then fail "invalid failed window succeeded"; fi
+if "$HELPER" --watch-repo >/dev/null 2>&1; then fail "missing watch-repo value succeeded"; fi
 if "$HELPER" --mark-notification-read nope >/dev/null 2>&1; then fail "invalid notification id succeeded"; fi
 if "$HELPER" --mark-notification-read 123 --mark-notification-read nope >/dev/null 2>&1; then fail "invalid bulk notification id succeeded"; fi
 if "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z >/dev/null 2>&1; then fail "legacy last_read_at option succeeded"; fi
 if "$HELPER" --phase nope >/dev/null 2>&1; then fail "invalid phase succeeded"; fi
 if "$HELPER" --mark-notification-done nope >/dev/null 2>&1; then fail "invalid done id succeeded"; fi
+if "$HELPER" --repository-scope owned >/dev/null 2>&1; then fail "dropped repository-scope option still accepted"; fi
+if "$HELPER" --failed-days 7 >/dev/null 2>&1; then fail "dropped failed-days option still accepted"; fi
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT
+export HOME="$sandbox/home"
+export XDG_CONFIG_HOME="$sandbox/xdg-config"
+mkdir -p "$HOME" "$XDG_CONFIG_HOME/omarchy"
 export GH_TEST_LOG="$sandbox/gh-calls"
 : >"$GH_TEST_LOG"
 ln -s "$(command -v jq)" "$sandbox/jq"
@@ -59,23 +63,13 @@ fi
 if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   if [[ $* == *author:@me* ]]; then
-    # The second node carries no rollup, which must land as NONE rather than
-    # being conflated with a pending run.
     cat <<'JSON'
 {"data":{"search":{"issueCount":2,"nodes":[{"number":7,"title":"Ship it","url":"https://github.com/octocat/hello/pull/7","updatedAt":"2026-01-05T00:00:00Z","isDraft":false,"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},{"number":9,"title":"No CI here","url":"https://github.com/octocat/quiet/pull/9","updatedAt":"2026-01-04T00:00:00Z","isDraft":true,"repository":{"nameWithOwner":"octocat/quiet"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}}
 JSON
     exit 0
   fi
-  if [[ $* == *'ownerAffiliations:[OWNER,ORGANIZATION_MEMBER]'* ]]; then
-    cat <<'JSON'
-{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":42,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":3},"pullRequests":{"totalCount":2}},{"name":"work","nameWithOwner":"acme/work","url":"https://github.com/acme/work","isArchived":false,"isFork":false,"stargazerCount":7,"updatedAt":"2026-01-06T00:00:00Z","issues":{"totalCount":4},"pullRequests":{"totalCount":5}},{"name":"old","nameWithOwner":"octocat/old","url":"https://github.com/octocat/old","isArchived":true,"isFork":false,"stargazerCount":1,"updatedAt":"2020-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":4998,"resetAt":"2026-01-01T01:00:00Z","cost":2}}}
-JSON
-    exit 0
-  fi
-  cat <<'JSON'
-{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":42,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":3},"pullRequests":{"totalCount":2}},{"name":"old","nameWithOwner":"octocat/old","url":"https://github.com/octocat/old","isArchived":true,"isFork":false,"stargazerCount":1,"updatedAt":"2020-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":4999,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
-JSON
-  exit 0
+  echo "unexpected graphql" >&2
+  exit 1
 fi
 endpoint=${*: -1}
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
@@ -97,81 +91,82 @@ if [[ $endpoint == /search/issues\?q=is%3Aopen+is%3Aissue* ]]; then
 JSON
   exit 0
 fi
+if [[ $endpoint == /repos/*/actions/runs/*/jobs* ]]; then
+  cat <<'JSON'
+{"jobs":[{"name":"Setup","status":"completed","conclusion":"success","steps":[]},{"name":"Build","status":"in_progress","conclusion":null,"steps":[{"name":"Checkout","status":"completed"},{"name":"Compile","status":"in_progress"}]},{"name":"Test","status":"queued","conclusion":null,"steps":[]}]}
+JSON
+  exit 0
+fi
 if [[ $endpoint == /repos/octocat/hello/actions/runs* ]]; then
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   if [[ $endpoint == *status=queued* ]]; then
-    # Simulate a paginated response where the active run is beyond the first
-    # 100 records. A non-paginated or unfiltered implementation misses id 10.
-    jq -n --arg now "$now" '{workflow_runs:[range(100)|{id:(1000+.),name:"Old",status:"completed",conclusion:"success",created_at:$now,updated_at:$now}]}'
     cat <<JSON
 {"workflow_runs":[{"id":10,"name":"CI","display_title":"Build","status":"queued","conclusion":null,"head_branch":"main","html_url":"https://github.com/octocat/hello/actions/runs/10","created_at":"$now","updated_at":"$now"}]}
 JSON
   elif [[ $endpoint == *status=completed* ]]; then
-    jq -n --arg now "$now" '{workflow_runs:[range(100)|{id:(2000+.),name:"Passed",status:"completed",conclusion:"success",created_at:$now,updated_at:$now}]}'
     cat <<JSON
-{"workflow_runs":[{"id":11,"name":"Test","status":"completed","conclusion":"failure","head_branch":"main","html_url":"https://github.com/octocat/hello/actions/runs/11","created_at":"$now","updated_at":"$now"}]}
+{"workflow_runs":[{"id":12,"name":"Newer fail","status":"completed","conclusion":"failure","head_branch":"main","html_url":"https://github.com/octocat/hello/actions/runs/12","created_at":"$now","updated_at":"2026-01-03T00:00:00Z"},{"id":11,"name":"Test","status":"completed","conclusion":"failure","head_branch":"main","html_url":"https://github.com/octocat/hello/actions/runs/11","created_at":"$now","updated_at":"2026-01-01T00:00:00Z"}]}
 JSON
   else
     printf '%s\n' '{"workflow_runs":[]}'
   fi
   exit 0
 fi
+if [[ $endpoint == /repos/*/actions/runs* ]]; then
+  printf '%s\n' '{"workflow_runs":[]}'
+  exit 0
+fi
 exit 1
 GH
 chmod +x "$sandbox/gh"
-out=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all --failed-days 7 --failed-limit 5)
+out=$(PATH="$sandbox:$PATH" "$HELPER" --watch-repo octocat/hello)
 assert_jq '.state == "ready" and .login == "octocat"' "$out" "ready state"
 assert_jq '.phase == "all"' "$out" "default phase is all"
-assert_jq '.repositories|length == 1 and .[0].issues == 3 and .[0].prs == 2 and .[0].stars == 42 and .[0].activeActions == 1' "$out" "repository metrics"
+assert_jq '.repositories|length == 1 and .[0].nameWithOwner == "octocat/hello"' "$out" "watch list is the scanned repository"
 assert_jq '.notifications|length == 2 and .[0].url == "https://github.com/octocat/hello/pull/7" and .[1].url == "https://github.com/octocat/hello"' "$out" "type-aware notification conversion and fallback"
 assert_jq '.reviewRequests|length == 1 and .[0].repository == "octocat/hello"' "$out" "review requests"
 assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].url|endswith("/issues/8"))' "$out" "assigned issues"
-assert_jq '(.actions|length == 1) and (.failedActions|length == 1)' "$out" "active and failed actions separated"
-assert_jq '.repositoryScope == "owned"' "$out" "default repository scope reported"
-assert_jq '.rateLimit.remaining == 4999 and (.warnings|length) == 0' "$out" "rate limit and warnings"
+assert_jq '(.actions|length == 1) and (.failedActions|length == 1) and (.failedActions[0].id == 12)' "$out" "active run plus last failure per watch repo"
+assert_jq '(.actions[0].jobs|length == 3) and (.actions[0].job == "Build") and (.actions[0].step == "Compile")' "$out" "live run carries job pipeline and current step"
 assert_jq '(.myPullRequests|length == 2) and (.myPullRequests[0].id == "octocat/hello#7") and (.myPullRequests[0].checks == "FAILURE")' "$out" "authored pull requests with check rollup"
 assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true)' "$out" "missing rollup falls back to NONE"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"
+assert_jq '(.warnings|length) == 0' "$out" "no warnings on the happy path"
 grep -q 'author:@me.*sort:updated-desc' "$GH_TEST_LOG" || fail "authored pull request search was not server sorted"
 grep -q 'author:@me.*archived:false' "$GH_TEST_LOG" || fail "authored pull request search was not archive filtered"
-grep -q -- '--paginate.*status=queued' "$GH_TEST_LOG" || fail "queued Actions request was not paginated"
-grep -q 'status=completed.*created=%3E%3D' "$GH_TEST_LOG" || fail "completed Actions request was not date bounded"
 grep -q 'review-requested%3A%40me+draft%3Afalse+archived%3Afalse' "$GH_TEST_LOG" || fail "review request search was not draft and archive filtered"
 grep -q 'assignee%3A%40me+archived%3Afalse' "$GH_TEST_LOG" || fail "assigned issue search was not archive filtered"
-: >"$GH_TEST_LOG"
-out_archived_reviews=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --include-archived-reviews true)
-assert_jq '(.reviewRequests|length == 1) and (.assignedIssues|length == 1)' "$out_archived_reviews" "searches still return with archived included"
-if grep -q 'archived%3Afalse' "$GH_TEST_LOG"; then fail "archived filter applied despite --include-archived-reviews true"; fi
-# The draft exclusion has its own setting, so it must survive the archived one.
-grep -q 'draft%3Afalse' "$GH_TEST_LOG" || fail "draft exclusion dropped when archived repositories are included"
-: >"$GH_TEST_LOG"
-out_drafts=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --include-draft-reviews true)
-assert_jq '.reviewRequests|length == 1' "$out_drafts" "review requests still return with drafts included"
-if grep -q 'draft%3Afalse' "$GH_TEST_LOG"; then fail "draft filter applied despite --include-draft-reviews true"; fi
-grep -q 'archived%3Afalse' "$GH_TEST_LOG" || fail "archived filter dropped when drafts are included"
-# The repository-list archive setting independently controls authored PRs.
-: >"$GH_TEST_LOG"
-out_archived=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --include-archived true)
-assert_jq '.myPullRequests|length == 2' "$out_archived" "authored pull requests survive the archived setting"
-grep -q 'author:@me' "$GH_TEST_LOG" || fail "authored pull request search did not run"
-if grep -q 'archived:false' "$GH_TEST_LOG"; then fail "archived filter applied despite --include-archived true"; fi
-# Each scope run truncates the log first, so the greps below read only the run
-# they belong to rather than an earlier one that used the other affiliation.
-: >"$GH_TEST_LOG"
-out_owned=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
-assert_jq '.repositoryScope == "owned" and (.repositories|length) == 1 and ([.repositories[].nameWithOwner]|index("acme/work")|not)' "$out_owned" "owned scope excludes organization repositories"
-grep -q 'ownerAffiliations:OWNER,' "$GH_TEST_LOG" || fail "default scope did not query owned repositories"
-: >"$GH_TEST_LOG"
-out_scoped=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --repository-scope organizations)
-assert_jq '.repositoryScope == "organizations" and (.repositories|length) == 2 and ([.repositories[].nameWithOwner]|index("acme/work") != null)' "$out_scoped" "organization scope includes organization repositories"
-grep -q 'ownerAffiliations:\[OWNER,ORGANIZATION_MEMBER\],' "$GH_TEST_LOG" || fail "organization scope did not reach the query"
-if grep -q 'ownerAffiliations:OWNER,' "$GH_TEST_LOG"; then fail "owned affiliation used despite the organization scope"; fi
+grep -q '/repos/octocat/hello/actions/runs?status=queued' "$GH_TEST_LOG" || fail "watch repo was not scanned for queued Actions"
+grep -q '/repos/octocat/hello/actions/runs/10/jobs' "$GH_TEST_LOG" || fail "live run did not fetch jobs"
+if grep -- '--paginate' "$GH_TEST_LOG" | grep -q '/actions/runs'; then fail "Actions scan still paginates"; fi
+if grep -q 'created=%3E%3D' "$GH_TEST_LOG"; then fail "completed Actions request was still date bounded"; fi
+if grep -q 'ownerAffiliations' "$GH_TEST_LOG"; then fail "repository GraphQL listing still ran"; fi
 
 : >"$GH_TEST_LOG"
-inbox=$(PATH="$sandbox:$PATH" "$HELPER" --phase inbox --action-scan all)
+inbox=$(PATH="$sandbox:$PATH" "$HELPER" --phase inbox --watch-repo octocat/hello)
 assert_jq '.phase == "inbox" and .login == "octocat" and (.myPullRequests|length) == 2 and (.actions|length) == 0' "$inbox" "inbox phase skips actions"
-if grep -q 'ownerAffiliations:' "$GH_TEST_LOG"; then fail "inbox phase still listed repositories"; fi
 if grep -q '/actions/runs' "$GH_TEST_LOG"; then fail "inbox phase still scanned Actions"; fi
+if grep -q 'ownerAffiliations' "$GH_TEST_LOG"; then fail "inbox phase still listed repositories"; fi
+
+: >"$GH_TEST_LOG"
+off=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --watch-repo octocat/hello)
+assert_jq '(.actions|length) == 0 and (.failedActions|length) == 0' "$off" "action-scan off skips Actions"
+if grep -q '/actions/runs' "$GH_TEST_LOG"; then fail "action-scan off still scanned Actions"; fi
+
+: >"$GH_TEST_LOG"
+defaults=$(PATH="$sandbox:$PATH" "$HELPER" --phase actions)
+assert_jq '(.repositories|length == 2) and ([.repositories[].nameWithOwner]|index("omacom/omarchy") != null) and ([.repositories[].nameWithOwner]|index("NetCask-Labs/NetCask-commercial") != null)' "$defaults" "default watch list is omarchy and NetCask"
+grep -q '/repos/omacom/omarchy/actions/runs' "$GH_TEST_LOG" || fail "default watch list did not scan omarchy"
+grep -q '/repos/NetCask-Labs/NetCask-commercial/actions/runs' "$GH_TEST_LOG" || fail "default watch list did not scan NetCask"
+
+mkdir -p "$XDG_CONFIG_HOME/omarchy"
+printf '%s\n' '{"actionRepos":["octocat/hello"]}' >"$XDG_CONFIG_HOME/omarchy/github.json"
+: >"$GH_TEST_LOG"
+from_config=$(PATH="$sandbox:$PATH" "$HELPER" --phase actions)
+assert_jq '.repositories|length == 1 and .[0].nameWithOwner == "octocat/hello"' "$from_config" "config actionRepos override the default watch list"
+grep -q '/repos/octocat/hello/actions/runs' "$GH_TEST_LOG" || fail "config watch list was not scanned"
+if grep -q '/repos/omacom/omarchy/actions/runs' "$GH_TEST_LOG"; then fail "default watch list used despite config"; fi
+rm -f "$XDG_CONFIG_HOME/omarchy/github.json"
 
 : >"$GH_TEST_LOG"
 mark=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123)
@@ -196,8 +191,6 @@ set -e
 assert_jq '.state == "error" and .notificationId == "124" and (.message|test("boundary patch rejected")) and (.message|contains("ghp_")|not) and (.message|contains("[REDACTED]"))' "$mark_partial" "partial bulk failure reports the failing notification without exposing credentials"
 mapfile -t partial_calls < <(sort "$GH_TEST_LOG")
 [[ ${#partial_calls[@]} -eq 3 && ${partial_calls[0]} == 'api --method PATCH /notifications/threads/123' && ${partial_calls[1]} == 'api --method PATCH /notifications/threads/124' && ${partial_calls[2]} == 'api --method PATCH /notifications/threads/125' ]] || fail "partial bulk failure did not patch every confirmed notification"
-# A rejected request must surface as an error payload rather than an empty
-# response, which is what a missing notifications scope looks like in practice.
 set +e
 mark_all_failed=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 999)
 mark_all_failed_status=$?
@@ -224,18 +217,16 @@ assert_jq '.state == "error" and .notificationId == "123"' "$mark_setup_failed" 
 assert_jq '.state == "error" and .notificationId == "123"' "$bulk_setup_failed" "bulk mark setup failure reports an error"
 assert_jq '.state == "error"' "$fetch_setup_failed" "refresh setup failure reports an error"
 
-# The Actions scan runs in xargs subshells, which only see exported functions.
-# An unexported helper there degrades every warning to the generic fallback
-# instead of the API's own explanation.
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ $1 == auth ]]; then exit 0; fi
 if [[ $1 == api && $2 == graphql ]]; then
   cat <<'JSON'
-{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":1,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":10,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
+{"data":{"search":{"issueCount":0,"nodes":[]}}}
 JSON
   exit 0
 fi
+if [[ $1 == api && $2 == user ]]; then echo octocat; exit 0; fi
 endpoint=${*: -1}
 if [[ $endpoint == /repos/octocat/hello/actions/runs* ]]; then
   echo "HTTP 403: Resource not accessible by integration" >&2
@@ -244,10 +235,9 @@ fi
 printf '%s\n' '[]'
 GH
 chmod +x "$sandbox/gh"
-scoped=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all)
+scoped=$(PATH="$sandbox:$PATH" "$HELPER" --watch-repo octocat/hello --phase actions)
 assert_jq '(.warnings|length) > 0 and (.warnings[0]|test("403"))' "$scoped" "Actions warnings keep the API error text"
 
-# Hostile html_url and repository names must not reach the panel or gh api.
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ $1 == auth ]]; then exit 0; fi
@@ -259,11 +249,10 @@ if [[ $1 == api && $2 == graphql ]]; then
 JSON
     exit 0
   fi
-  cat <<'JSON'
-{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":1,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}},{"name":"evil","nameWithOwner":"octocat/hello$(id)","url":"https://evil.example/repo","isArchived":false,"isFork":false,"stargazerCount":1,"updatedAt":"2026-01-02T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":10,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
-JSON
-  exit 0
+  echo "unexpected graphql" >&2
+  exit 1
 fi
+if [[ $1 == api && $2 == user ]]; then echo octocat; exit 0; fi
 endpoint=${*: -1}
 if [[ $endpoint == /notifications* ]]; then
   cat <<'JSON'
@@ -277,6 +266,10 @@ if [[ $endpoint == /search/issues* ]]; then
 JSON
   exit 0
 fi
+if [[ $endpoint == /repos/*/actions/runs/*/jobs* ]]; then
+  printf '%s\n' '{"jobs":[]}'
+  exit 0
+fi
 if [[ $endpoint == /repos/* ]]; then
   printf '%s\n' '{"workflow_runs":[]}'
   exit 0
@@ -285,7 +278,7 @@ printf '%s\n' '[]'
 GH
 chmod +x "$sandbox/gh"
 : >"$GH_TEST_LOG"
-sanitized=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all)
+sanitized=$(PATH="$sandbox:$PATH" "$HELPER" --watch-repo octocat/hello --watch-repo 'octocat/hello$(id)')
 assert_jq '([.notifications[].url]|index("javascript:alert(1)")|not) and ([.notifications[].url]|index("https://github.com.evil.com/octocat/hello")|not)' "$sanitized" "hostile notification urls are dropped"
 assert_jq '.notifications[0].url == "https://github.com/octocat/hello/pull/7" and .notifications[1].url == "https://github.com/octocat/hello"' "$sanitized" "notification urls fall back to github.com"
 assert_jq '([.reviewRequests[].url]|index("https://evil.example/pull/7")|not) and (.reviewRequests[0].url == "")' "$sanitized" "hostile search urls are dropped"
