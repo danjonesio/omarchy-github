@@ -163,7 +163,7 @@ assert_jq '.state == "ready" and .notificationId == "123"' "$mark" "mark notific
 : >"$GH_TEST_LOG"
 mark_all=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123 --mark-notification-read 124)
 assert_jq '.state == "ready" and .count == 2' "$mark_all" "mark all notifications read"
-mapfile -t mark_calls <"$GH_TEST_LOG"
+mapfile -t mark_calls < <(sort "$GH_TEST_LOG")
 [[ ${#mark_calls[@]} -eq 2 ]] || fail "bulk mark made an unexpected number of API calls"
 [[ ${mark_calls[0]} == 'api --method PATCH /notifications/threads/123' && ${mark_calls[1]} == 'api --method PATCH /notifications/threads/124' ]] || fail "bulk mark did not patch exactly the confirmed notification ids"
 if grep -q ' --method PUT ' "$GH_TEST_LOG"; then fail "bulk mark used last_read_at PUT"; fi
@@ -174,8 +174,8 @@ mark_partial_status=$?
 set -e
 [[ $mark_partial_status -eq 1 ]] || fail "partial bulk failure returned status $mark_partial_status"
 assert_jq '.state == "error" and .notificationId == "124" and (.message|test("boundary patch rejected")) and (.message|contains("ghp_")|not) and (.message|contains("[REDACTED]"))' "$mark_partial" "partial bulk failure reports the failing notification without exposing credentials"
-mapfile -t partial_calls <"$GH_TEST_LOG"
-[[ ${#partial_calls[@]} -eq 2 && ${partial_calls[0]} == 'api --method PATCH /notifications/threads/123' && ${partial_calls[1]} == 'api --method PATCH /notifications/threads/124' ]] || fail "partial bulk failure did not stop at the failing notification"
+mapfile -t partial_calls < <(sort "$GH_TEST_LOG")
+[[ ${#partial_calls[@]} -eq 3 && ${partial_calls[0]} == 'api --method PATCH /notifications/threads/123' && ${partial_calls[1]} == 'api --method PATCH /notifications/threads/124' && ${partial_calls[2]} == 'api --method PATCH /notifications/threads/125' ]] || fail "partial bulk failure did not patch every confirmed notification"
 # A rejected request must surface as an error payload rather than an empty
 # response, which is what a missing notifications scope looks like in practice.
 set +e

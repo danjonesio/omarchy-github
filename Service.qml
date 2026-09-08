@@ -300,32 +300,67 @@ Item {
         startQueuedMark();
     }
 
-    // Capture the exact displayed thread IDs on the first click. The panel binds
-    // confirmation to notificationsRevision, so any refresh invalidates this
-    // prepared value before the destructive second click can run. Only these IDs
-    // are PATCHed; a last_read_at bulk mark is never used.
-    function prepareMarkAllNotificationsRead() {
-        if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)
-            return "";
-
+    // Snapshot is "revision:id,id,id". QML's JSON.parse does not always yield a
+    // real Array, so Array.isArray(snapshot.ids) dropped every bulk mark.
+    function notificationIdList(rows) {
         var ids = [];
         var seen = {};
-        for (var i = 0; i < notifications.length; i++) {
-            var id = String(notifications[i].id || "");
-            if (!/^\d+$/.test(id)) {
-                notificationActionStatus = "Refresh before marking everything read.";
-                actionStatusTimer.restart();
-                return "";
-            }
+        var list = rows || [];
+        for (var i = 0; i < list.length; i++) {
+            var id = String(list[i].id || "");
+            if (!/^\d+$/.test(id))
+                return null;
             if (seen[id])
                 continue;
             seen[id] = true;
             ids.push(id);
         }
-        if (ids.length === 0)
+        return ids;
+    }
+
+    function markAllSnapshot(ids, revision) {
+        return String(revision) + ":" + ids.join(",");
+    }
+
+    function idsFromSnapshot(prepared) {
+        var text = String(prepared || "");
+        var sep = text.indexOf(":");
+        if (sep < 0)
+            return [];
+        var parts = text.substring(sep + 1).split(",");
+        var ids = [];
+        for (var i = 0; i < parts.length; i++) {
+            if (/^\d+$/.test(parts[i]))
+                ids.push(parts[i]);
+        }
+        return ids;
+    }
+
+    // Capture the exact displayed thread IDs on the first click. The panel binds
+    // confirmation to notificationsRevision, so any refresh invalidates this
+    // prepared value before the destructive second click can run. Only these IDs
+    // are PATCHed; a last_read_at bulk mark is never used.
+    function prepareMarkAllNotificationsRead() {
+        if (loading || fetchProcess.running) {
+            notificationActionStatus = "Wait for GitHub to finish refreshing.";
+            actionStatusTimer.restart();
+            return "";
+        }
+        if (markProcess.running) {
+            notificationActionStatus = "A mark-as-read is already running.";
+            actionStatusTimer.restart();
+            return "";
+        }
+        if (notifications.length === 0)
             return "";
 
-        return JSON.stringify({ids: ids, revision: notificationsRevision});
+        var ids = notificationIdList(notifications);
+        if (!ids || ids.length === 0) {
+            notificationActionStatus = "Refresh before marking everything read.";
+            actionStatusTimer.restart();
+            return "";
+        }
+        return markAllSnapshot(ids, notificationsRevision);
     }
 
     function markAllNotificationsRead(prepared) {
@@ -341,16 +376,7 @@ Item {
             return ;
         }
 
-        var snapshot;
-        try {
-            snapshot = JSON.parse(confirmed);
-        } catch (error) {
-            notificationActionStatus = "Refresh before marking everything read.";
-            actionStatusTimer.restart();
-            return ;
-        }
-
-        var ids = Array.isArray(snapshot.ids) ? snapshot.ids : [];
+        var ids = idsFromSnapshot(confirmed);
         if (ids.length === 0) {
             notificationActionStatus = "Refresh before marking everything read.";
             actionStatusTimer.restart();

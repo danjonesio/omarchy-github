@@ -95,23 +95,38 @@ error_detail() {
 # Only PATCH the confirmed thread IDs. Never PUT /notifications with
 # last_read_at, which would mark threads the panel never displayed.
 if ((${#mark_notifications[@]} > 0)); then
-  if ! error=$(mktemp); then
+  if ! mark_tmp=$(mktemp -d); then
     jq -n --arg id "${mark_notifications[0]}" '{state:"error",message:"Could not prepare the notification request.",notificationId:$id}'
     exit 1
   fi
+  trap 'rm -rf "$mark_tmp"' EXIT
+  mark_one() {
+    local id=$1
+    if gh api --method PATCH "/notifications/threads/$id" >/dev/null 2>"$mark_tmp/$id.err"; then
+      : >"$mark_tmp/$id.ok"
+    fi
+  }
+  export mark_tmp
+  export -f mark_one
+  # Inbox size is tens to hundreds of threads; a serial gh process per ID
+  # takes long enough that the panel looks stuck. Bounded parallelism keeps
+  # each request independent without a last_read_at bulk write.
+  printf '%s\n' "${mark_notifications[@]}" | xargs -r -P 6 -n 1 bash -c 'mark_one "$1"' _
   failed_id=""
   failed_message=""
+  ok=0
   for id in "${mark_notifications[@]}"; do
-    if gh api --method PATCH "/notifications/threads/$id" >/dev/null 2>"$error"; then
-      continue
+    if [[ -f $mark_tmp/$id.ok ]]; then
+      ok=$((ok + 1))
+    elif [[ -z $failed_id ]]; then
+      failed_id=$id
+      failed_message=$(error_detail "$mark_tmp/$id.err")
     fi
-    failed_id=$id
-    failed_message=$(error_detail "$error")
-    break
   done
-  rm -f "$error"
+  rm -rf "$mark_tmp"
+  trap - EXIT
   if [[ -n $failed_id ]]; then
-    jq -n --arg id "$failed_id" --arg message "${failed_message:-Could not mark notification read.}" '{state:"error",message:$message,notificationId:$id}'
+    jq -n --arg id "$failed_id" --arg message "${failed_message:-Could not mark notification read.}" --argjson marked "$ok" '{state:"error",message:$message,notificationId:$id,marked:$marked}'
     exit 1
   fi
   if ((${#mark_notifications[@]} == 1)); then
