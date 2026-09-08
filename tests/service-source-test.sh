@@ -24,8 +24,8 @@ assert_not_contains 'function repositoryMode()' \
   "repositoryMode is still in the service"
 assert_not_contains 'function actionMode()' \
   "actionMode is still in the service"
-assert_contains 'readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || failingPullRequestCount > 0)' \
-  "running Actions still lights the bar icon"
+assert_contains 'readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || failingPullRequestCount > 0 || actionCount > 0)' \
+  "running Actions do not light the bar icon"
 
 assert_contains $'function refresh(force) {\n        var forced = force === true;\n        if (!forced && isFresh()) {\n            if (actionsFetchedAt === "" && !actionsLoading && !fetchProcess.running)\n                startPhase("actions", false);\n            return ;\n        }\n        if (fetchProcess.running || markProcess.running || markQueue.length > 0) {\n            refreshQueued = true;\n            return ;\n        }' \
   "refresh and notification marking are not serialized"

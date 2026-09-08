@@ -63,7 +63,9 @@ Item {
     // An unrecognised value falls back to the web app window rather than the
     // browser, so a stale entry cannot silently revert the default behaviour.
     readonly property string linkBehavior: String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"
-    readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || failingPullRequestCount > 0)
+    // Unread mail, a broken check on your own PR, or a watch-list run kicking
+    // off. Assigned issues stay in the panel without lighting the bar.
+    readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || failingPullRequestCount > 0 || actionCount > 0)
 
     // StatusCheckRollup groupings live here so the alarming count, the row label
     // and the row glyph cannot drift apart when a state is reclassified.

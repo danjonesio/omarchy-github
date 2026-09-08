@@ -20,7 +20,7 @@ The dashboard is ordered by urgency so the most actionable work appears first:
 
 ## Highlights
 
-- Native Omarchy Quattro bar widget with an Octocat icon
+- Native Omarchy Quattro bar widget with an Octocat icon that lights for unread notifications, failing checks on your own PRs, or a running watch-list Action
 - Compact previews that keep busy accounts readable
 - Direct links to notifications, pull requests, issues, and workflow runs
 - One-click notification mark-as-read, confirmed by GitHub before removal

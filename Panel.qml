@@ -263,6 +263,7 @@ Panel {
         actionEnabled: notificationsSection ? notificationsSection.actionEnabled : false,
         actionArmed: notificationsSection ? notificationsSection.actionArmed : false,
         actionBusy: notificationsSection ? notificationsSection.actionBusy : false,
+        alarming: github.alarming,
         actionCount: github.actions.length,
         failedCount: github.failedActions.length,
         firstAction: github.actions.length > 0 ? (github.actions[0].repository + " " + github.actions[0].name + " " + (github.actions[0].job || "") + " " + (github.actions[0].step || "")) : "",
