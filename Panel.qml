@@ -480,14 +480,26 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             // The hero reserves the trailing space and centres the control
-            // against the labels, so the gear needs no geometry of its own.
+            // against the labels, so the header buttons need no geometry of
+            // their own.
             trailingControl: Component {
-              PanelActionButton {
-                iconText: "󰒓"
-                tooltipText: "GitHub settings"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.showSettings(true)
+              Row {
+                spacing: Style.space(4)
+                PanelActionButton {
+                  enabled: !github.inboxLoading && !github.actionsLoading && !github.marking
+                  iconText: github.inboxLoading || github.actionsLoading ? "󰑐" : "󰑓"
+                  tooltipText: github.inboxLoading || github.actionsLoading ? "Refreshing…" : "Refresh (R)"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: github.refresh(true)
+                }
+                PanelActionButton {
+                  iconText: "󰒓"
+                  tooltipText: "GitHub settings"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.showSettings(true)
+                }
               }
             }
             iconComponent: Component {

@@ -121,6 +121,7 @@ omarchy plugin remove io.github.danjonesio.github
 | Left click Octocat | Open or close the dashboard |
 | Right or middle click Octocat | Refresh |
 | Click a row | Open it on GitHub; notification rows are also marked read |
+| Refresh button in the panel header | Refresh the dashboard now |
 | Gear button in the panel header | Open the settings page |
 | Check button on a notification | Mark the thread read immediately, then confirm with GitHub |
 | Archive button on a notification | Mark the thread **Done** |
