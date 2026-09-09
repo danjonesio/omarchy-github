@@ -16,17 +16,17 @@ The dashboard is ordered by urgency so the most actionable work appears first:
 - **Review requests** — pull requests waiting on you, with approval progress (`0/2 approved`) and check state
 - **My pull requests** — your open PRs with `n/m approved` and the state of their checks
 - **Assigned issues** — keep track of open issues assigned to you
-- **Running Actions** — pinned to omarchy and NetCask; live rows show the job pipeline (`Setup ✓ · Build ● · Test ○`) and current step
+- **Running Actions** — every non-archived repository under danjonesio and NetCask-Labs; live rows show the job pipeline (`Setup ✓ · Build ● · Test ○`) and current step
 
 ## Highlights
 
-- Native Omarchy Quattro bar widget with an Octocat icon that lights for unread notifications, failing checks on your own PRs, or a running watch-list Action
+- Native Omarchy Quattro bar widget with an Octocat icon that lights for unread notifications, failing checks on your own PRs, or a running Action on a watched account
 - Compact previews that keep busy accounts readable
 - Direct links to notifications, pull requests, issues, and workflow runs
 - One-click notification mark-as-read, confirmed by GitHub before removal
 - Bulk mark-as-read behind a confirmation step, PATCHing only the confirmed thread IDs
 - Complete paginated notification fetching
-- Actions scanning pinned to a short watch list, with bounded concurrency
+- Actions scanning across danjonesio and NetCask-Labs, with bounded concurrency
 - Graceful partial results when an endpoint or repository is unavailable
 - Explicit logged-out, rate-limited, missing CLI, loading, and error states
 - Mouse and keyboard navigation throughout
@@ -135,26 +135,29 @@ omarchy plugin remove io.github.danjonesio.github
 
 Rows open through `omarchy-launch-webapp` by default, so GitHub gets a dedicated app window rather than a tab in an already-crowded browser. That helper targets Chromium-based default browsers and falls back to `chromium.desktop`; if you have no Chromium-based browser, switch **Open links** to **Browser tab** and rows open through `xdg-open` using your default URL handler instead. This also lets a workspace-aware browser launcher choose the destination without a separate focus command switching workspaces first.
 
-Notifications show 20 rows per page. Other activity sections show five items initially and expand to a bounded list of 25. **Open in GitHub** takes you to the corresponding complete GitHub view where one is available. When nothing is running, a last-failure caption links to the most recent failed watch-list run.
+Notifications show 20 rows per page. Other activity sections show five items initially and expand to a bounded list of 25. **Open in GitHub** takes you to the corresponding complete GitHub view where one is available. When nothing is running, a last-failure caption links to the most recent failed watched run.
 
 The notifications footer also carries **Mark all read**. The first click captures the displayed notification IDs and changes the label to **Confirm?**; only the second click sends the request. Each confirmed thread is marked with `PATCH /notifications/threads/:id`. Threads that never appeared in the panel are left unread. The confirmation lapses after a few seconds, when the panel closes, when a refresh changes the notification list, and whenever another mark is running. The dashboard refreshes from GitHub after every attempt; large inboxes processed asynchronously may briefly retain threads that are already on their way out.
 
 ## Settings
 
-**Open links** and **Refresh interval** are editable in the panel through the gear button. Changes are written to the widget's entry in `shell.json` and apply immediately. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old. While a watch-list run is live, Actions are polled about every 25 seconds.
+**Open links** and **Refresh interval** are editable in the panel through the gear button. Changes are written to the widget's entry in `shell.json` and apply immediately. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old. While a watched run is live, Actions are polled about every 5 minutes.
 
 | Setting | Default |
 | --- | --- |
 | Refresh interval | 900 seconds (15 minutes) |
 | Open links | **Web app window** |
 
-Actions are pinned to `omacom/omarchy` and `NetCask-Labs/NetCask-commercial`. Override the list in `~/.config/omarchy/github.json`:
+Actions watch every non-archived repository under `danjonesio` and `NetCask-Labs`. Override the accounts or add extra repositories in `~/.config/omarchy/github.json`:
 
 ```json
 {
+  "actionOwners": [
+    "danjonesio",
+    "NetCask-Labs"
+  ],
   "actionRepos": [
-    "omacom/omarchy",
-    "NetCask-Labs/NetCask-commercial"
+    "omacom/omarchy"
   ]
 }
 ```
@@ -182,7 +185,7 @@ The shell watches local plugin files, making QML iteration fast.
 
 `Service.qml` schedules an executable helper, `omarchy-github-fetch`, which calls GitHub exclusively through `gh api` and processes responses with `jq`.
 
-- REST retrieves notifications and workflow runs on the watch list.
+- REST retrieves notifications and workflow runs on watched accounts.
 - GitHub issue search retrieves review requests and assigned issues.
 - GraphQL search retrieves review requests and your authored pull requests together with check rollup and approval counts (`approved` of `requested`), so `0/2 approved` costs no extra request. Reviewer names are omitted on purpose.
 - Live runs fetch jobs so the panel can show the pipeline stage.
@@ -191,7 +194,7 @@ The shell watches local plugin files, making QML iteration fast.
 Run the helper directly to inspect its JSON output:
 
 ```bash
-./omarchy-github-fetch --watch-repo omacom/omarchy --phase all | jq
+./omarchy-github-fetch --watch-owner danjonesio --watch-owner NetCask-Labs --phase all | jq
 ```
 
 ## License

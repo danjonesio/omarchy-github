@@ -63,8 +63,8 @@ Item {
     // An unrecognised value falls back to the web app window rather than the
     // browser, so a stale entry cannot silently revert the default behaviour.
     readonly property string linkBehavior: String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"
-    // Unread mail, a broken check on your own PR, or a watch-list run kicking
-    // off. Assigned issues stay in the panel without lighting the bar.
+    // Unread mail, a broken check on your own PR, or a watched-account run
+    // kicking off. Assigned issues stay in the panel without lighting the bar.
     readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || failingPullRequestCount > 0 || actionCount > 0)
 
     // StatusCheckRollup groupings live here so the alarming count, the row label
@@ -122,14 +122,9 @@ Item {
         return (Date.now() - t) < 60000;
     }
 
-    readonly property var actionWatchRepos: ["omacom/omarchy", "NetCask-Labs/NetCask-commercial"]
-
     function command(phase) {
         var p = phase || "all";
-        var cmd = [helperPath(), "--phase", p, "--cache-file", cachePath(), "--concurrency", "6"];
-        for (var i = 0; i < actionWatchRepos.length; i++)
-            cmd.push("--watch-repo", actionWatchRepos[i]);
-        return cmd;
+        return [helperPath(), "--phase", p, "--cache-file", cachePath(), "--concurrency", "6"];
     }
 
     function copyMap(value) {
@@ -465,7 +460,7 @@ Item {
     }
 
     Timer {
-        interval: 25000
+        interval: 300000
         repeat: true
         running: root.actionCount > 0
         onTriggered: {

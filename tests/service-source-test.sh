@@ -12,10 +12,12 @@ assert_not_contains() {
   [[ $SERVICE_SOURCE != *"$1"* ]] || fail "$2"
 }
 
-assert_contains 'readonly property var actionWatchRepos: ["omacom/omarchy", "NetCask-Labs/NetCask-commercial"]' \
-  "Actions are not pinned to omarchy and NetCask"
-assert_contains 'cmd.push("--watch-repo", actionWatchRepos[i]);' \
-  "the helper is not given the watch list"
+assert_not_contains 'actionWatchRepos' \
+  "the service still hard-codes a two-repository Actions watch list"
+assert_not_contains '--watch-repo' \
+  "the service still pins Actions to specific repositories instead of the helper defaults"
+assert_not_contains '--watch-owner' \
+  "the service still overrides the helper account watch list"
 assert_contains '"--concurrency", "6"' \
   "Actions concurrency is not passed to the helper"
 assert_not_contains '--repository-scope' \
@@ -31,7 +33,7 @@ assert_contains $'function refresh(force) {\n        var forced = force === true
   "refresh and notification marking are not serialized"
 assert_contains 'startPhase("inbox", true)' \
   "refresh does not load the inbox before Actions"
-assert_contains $'interval: 25000\n        repeat: true\n        running: root.actionCount > 0' \
+assert_contains $'interval: 300000\n        repeat: true\n        running: root.actionCount > 0' \
   "running Actions are not polled while live"
 assert_contains $'notifications = visibleNotifications(data.notifications);\n                notificationsRevision++;' \
   "notification refreshes do not invalidate prepared confirmations"
