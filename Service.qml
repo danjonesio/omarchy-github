@@ -63,8 +63,8 @@ Item {
     // An unrecognised value falls back to the web app window rather than the
     // browser, so a stale entry cannot silently revert the default behaviour.
     readonly property string linkBehavior: String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"
-    // Unread mail, a broken check on your own PR, or a watched-account run
-    // kicking off. Assigned issues stay in the panel without lighting the bar.
+    // Unread mail, a broken check on your own PR, or a watch-list run kicking
+    // off. Assigned issues stay in the panel without lighting the bar.
     readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || failingPullRequestCount > 0 || actionCount > 0)
 
     // StatusCheckRollup groupings live here so the alarming count, the row label
@@ -122,9 +122,98 @@ Item {
         return (Date.now() - t) < 60000;
     }
 
+    property var actionWatchRepos: ["omacom/omarchy", "NetCask-Labs/NetCask-commercial"]
+    property string watchRepoStatus: ""
+
+    function configPath() {
+        var xdg = String(Quickshell.env("XDG_CONFIG_HOME") || "");
+        var home = String(Quickshell.env("HOME") || "");
+        var dir = xdg !== "" ? xdg : (home + "/.config");
+        return dir + "/omarchy/github.json";
+    }
+
+    function normalizeWatchRepo(value) {
+        var name = String(value || "").trim();
+        if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(name))
+            return "";
+        return name;
+    }
+
+    function parseWatchRepos(raw) {
+        try {
+            var data = JSON.parse(String(raw || ""));
+            var incoming = Array.isArray(data.actionRepos) ? data.actionRepos : [];
+            var next = [];
+            var seen = {};
+            for (var i = 0; i < incoming.length; i++) {
+                var name = normalizeWatchRepo(incoming[i]);
+                if (name === "" || seen[name])
+                    continue;
+                seen[name] = true;
+                next.push(name);
+                if (next.length >= 10)
+                    break;
+            }
+            if (next.length > 0)
+                actionWatchRepos = next;
+        } catch (error) {
+        }
+    }
+
+    function persistWatchRepos(repos) {
+        actionWatchRepos = repos;
+        var cmd = ["python3", "-c", "import json, os, sys\npath = sys.argv[1]\nos.makedirs(os.path.dirname(path), exist_ok=True)\njson.dump({'actionRepos': sys.argv[2:]}, open(path, 'w'), indent=2)\nopen(path, 'a').write('\\n')", configPath()];
+        watchWrite.command = cmd.concat(repos);
+        watchWrite.running = true;
+    }
+
+    function addWatchRepo(value) {
+        var name = normalizeWatchRepo(value);
+        if (name === "") {
+            watchRepoStatus = "Use owner/name, like omacom/omarchy.";
+            return false;
+        }
+        var next = [];
+        for (var i = 0; i < actionWatchRepos.length; i++) {
+            if (actionWatchRepos[i] === name) {
+                watchRepoStatus = name + " is already watched.";
+                return false;
+            }
+            next.push(actionWatchRepos[i]);
+        }
+        if (next.length >= 10) {
+            watchRepoStatus = "Watch at most 10 repositories.";
+            return false;
+        }
+        next.push(name);
+        watchRepoStatus = "";
+        persistWatchRepos(next);
+        refresh(true);
+        return true;
+    }
+
+    function removeWatchRepo(value) {
+        var name = String(value || "");
+        var next = [];
+        for (var i = 0; i < actionWatchRepos.length; i++) {
+            if (actionWatchRepos[i] !== name)
+                next.push(actionWatchRepos[i]);
+        }
+        watchRepoStatus = "";
+        persistWatchRepos(next);
+        refresh(true);
+    }
+
     function command(phase) {
         var p = phase || "all";
-        return [helperPath(), "--phase", p, "--cache-file", cachePath(), "--concurrency", "6"];
+        var cmd = [helperPath(), "--phase", p, "--cache-file", cachePath(), "--concurrency", "6"];
+        if (actionWatchRepos.length === 0)
+            cmd.push("--action-scan", "off");
+        else {
+            for (var i = 0; i < actionWatchRepos.length; i++)
+                cmd.push("--watch-repo", actionWatchRepos[i]);
+        }
+        return cmd;
     }
 
     function copyMap(value) {
@@ -447,8 +536,8 @@ Item {
     visible: false
 
     Component.onCompleted: {
-        cacheRead.command = ["cat", cachePath()];
-        cacheRead.running = true;
+        configRead.command = ["cat", configPath()];
+        configRead.running = true;
     }
 
     Timer {
@@ -475,6 +564,32 @@ Item {
         interval: 3000
         repeat: false
         onTriggered: root.notificationActionStatus = ""
+    }
+
+    Process {
+        id: configRead
+
+        running: false
+        command: ["cat", "/dev/null"]
+        onExited: function(exitCode) {
+            if (exitCode === 0)
+                root.parseWatchRepos(String(configOutput.text || ""));
+            cacheRead.command = ["cat", root.cachePath()];
+            cacheRead.running = true;
+        }
+
+        stdout: StdioCollector {
+            id: configOutput
+
+            waitForEnd: true
+        }
+    }
+
+    Process {
+        id: watchWrite
+
+        running: false
+        command: ["true"]
     }
 
     Process {

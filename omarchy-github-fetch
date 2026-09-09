@@ -27,6 +27,7 @@ Usage: omarchy-github-fetch [options]
                                 Defaults to omacom/omarchy and
                                 NetCask-Labs/NetCask-commercial, or
                                 actionRepos in ~/.config/omarchy/github.json.
+                                Owners are never expanded to every repository.
 EOF
 }
 

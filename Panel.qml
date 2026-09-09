@@ -200,6 +200,11 @@ Panel {
   // the file and every instance sees the new value. Applied locally first so
   // the control moves on the click, and the entry is merged from the current
   // settings because updateEntryInline replaces it whole.
+  function commitWatchRepo() {
+    if (github.addWatchRepo(watchRepoField.text))
+      watchRepoField.text = ""
+  }
+
   function persistSettings(values) {
     var entry = { id: root.moduleName }
     for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
@@ -288,7 +293,8 @@ Panel {
         failedCount: github.failedActions.length,
         firstAction: github.actions.length > 0 ? (github.actions[0].repository + " " + github.actions[0].name + " " + (github.actions[0].job || "") + " " + (github.actions[0].step || "")) : "",
         lastFailure: github.failedActions.length > 0 ? (github.failedActions[0].repository + " " + github.failedActions[0].name) : "",
-        pageSize: root.notificationPageSize
+        pageSize: root.notificationPageSize,
+        watchRepos: github.actionWatchRepos
       })
     }
     function clickMarkAll(): string {
@@ -726,13 +732,96 @@ Panel {
               }
             }
 
-            Text {
+            Column {
               width: parent.width
-              text: "Actions watch omacom/omarchy and NetCask-Labs/NetCask-commercial. Inbox loads first; running jobs fill in after. Edit ~/.config/omarchy/github.json to change the watch list."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
+              spacing: Style.space(6)
+
+              Text {
+                text: "ACTIONS REPOSITORIES"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Text {
+                width: parent.width
+                text: "Only these repositories are scanned for Actions. Inbox still loads for every account you can see."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              Repeater {
+                model: github.actionWatchRepos
+                delegate: Row {
+                  required property var modelData
+                  width: settingsContent.width
+                  spacing: Style.space(8)
+                  Text {
+                    width: parent.width - removeWatchButton.width - parent.spacing
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    elide: Text.ElideMiddle
+                  }
+                  PanelActionButton {
+                    id: removeWatchButton
+                    iconText: "󰅖"
+                    tooltipText: "Stop watching " + modelData
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: github.removeWatchRepo(modelData)
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                TextField {
+                  id: watchRepoField
+                  width: parent.width - addWatchButton.implicitWidth - parent.spacing
+                  placeholderText: "owner/name"
+                  foreground: root.foreground
+                  font.family: root.fontFamily
+                  Keys.onReturnPressed: function(event) {
+                    root.commitWatchRepo()
+                    event.accepted = true
+                  }
+                  Keys.onEnterPressed: function(event) {
+                    root.commitWatchRepo()
+                    event.accepted = true
+                  }
+                }
+
+                Button {
+                  id: addWatchButton
+                  text: "Add"
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  verticalPadding: Style.spacing.controlPaddingY
+                  onClicked: root.commitWatchRepo()
+                }
+              }
+
+              Text {
+                visible: github.watchRepoStatus !== ""
+                width: parent.width
+                text: github.watchRepoStatus
+                textFormat: Text.PlainText
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
             }
           }
         }

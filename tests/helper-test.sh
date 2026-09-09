@@ -10,6 +10,7 @@ bash -n "$HELPER"
 "$HELPER" --help >/dev/null
 if "$HELPER" --action-scan invalid >/dev/null 2>&1; then fail "invalid scan mode succeeded"; fi
 if "$HELPER" --watch-repo >/dev/null 2>&1; then fail "missing watch-repo value succeeded"; fi
+if "$HELPER" --watch-owner octocat >/dev/null 2>&1; then fail "dropped watch-owner option still accepted"; fi
 if "$HELPER" --mark-notification-read nope >/dev/null 2>&1; then fail "invalid notification id succeeded"; fi
 if "$HELPER" --mark-notification-read 123 --mark-notification-read nope >/dev/null 2>&1; then fail "invalid bulk notification id succeeded"; fi
 if "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z >/dev/null 2>&1; then fail "legacy last_read_at option succeeded"; fi
@@ -91,6 +92,28 @@ if [[ $endpoint == /search/issues\?q=is%3Aopen+is%3Aissue* ]]; then
 JSON
   exit 0
 fi
+if [[ $endpoint == /user/repos* ]]; then
+  cat <<'JSON'
+[{"full_name":"octocat/hello","archived":false,"fork":false,"html_url":"https://github.com/octocat/hello"}]
+JSON
+  exit 0
+fi
+if [[ $endpoint == /orgs/NetCask-Labs/repos* ]]; then
+  cat <<'JSON'
+[{"full_name":"NetCask-Labs/NetCask-commercial","archived":false,"fork":false,"html_url":"https://github.com/NetCask-Labs/NetCask-commercial"}]
+JSON
+  exit 0
+fi
+if [[ $endpoint == /orgs/danjonesio/repos* ]]; then
+  echo "HTTP 404: Not Found" >&2
+  exit 1
+fi
+if [[ $endpoint == /users/danjonesio/repos* ]]; then
+  cat <<'JSON'
+[{"full_name":"danjonesio/omardan","archived":false,"fork":false,"html_url":"https://github.com/danjonesio/omardan"},{"full_name":"danjonesio/old","archived":true,"fork":false,"html_url":"https://github.com/danjonesio/old"}]
+JSON
+  exit 0
+fi
 if [[ $endpoint == /repos/*/actions/runs/*/jobs* ]]; then
   cat <<'JSON'
 {"jobs":[{"name":"Setup","status":"completed","conclusion":"success","steps":[]},{"name":"Build","status":"in_progress","conclusion":null,"steps":[{"name":"Checkout","status":"completed"},{"name":"Compile","status":"in_progress"}]},{"name":"Test","status":"queued","conclusion":null,"steps":[]}]}
@@ -141,6 +164,9 @@ grep -q 'review-requested:@me.*draft:false' "$GH_TEST_LOG" || fail "review reque
 grep -q 'assignee%3A%40me+archived%3Afalse' "$GH_TEST_LOG" || fail "assigned issue search was not archive filtered"
 grep -q '/repos/octocat/hello/actions/runs?status=queued' "$GH_TEST_LOG" || fail "watch repo was not scanned for queued Actions"
 grep -q '/repos/octocat/hello/actions/runs/10/jobs' "$GH_TEST_LOG" || fail "live run did not fetch jobs"
+if grep -q '/users/danjonesio/repos' "$GH_TEST_LOG"; then fail "explicit watch-repo still expanded default owners"; fi
+if grep -q '/orgs/NetCask-Labs/repos' "$GH_TEST_LOG"; then fail "explicit watch-repo still listed default org repositories"; fi
+if grep -q '/user/repos' "$GH_TEST_LOG"; then fail "explicit watch-repo still listed the authenticated user's repositories"; fi
 if grep -- '--paginate' "$GH_TEST_LOG" | grep -q '/actions/runs'; then fail "Actions scan still paginates"; fi
 if grep -q 'created=%3E%3D' "$GH_TEST_LOG"; then fail "completed Actions request was still date bounded"; fi
 if grep -q 'ownerAffiliations' "$GH_TEST_LOG"; then fail "repository GraphQL listing still ran"; fi
@@ -150,6 +176,8 @@ inbox=$(PATH="$sandbox:$PATH" "$HELPER" --phase inbox --watch-repo octocat/hello
 assert_jq '.phase == "inbox" and .login == "octocat" and (.myPullRequests|length) == 2 and (.actions|length) == 0' "$inbox" "inbox phase skips actions"
 if grep -q '/actions/runs' "$GH_TEST_LOG"; then fail "inbox phase still scanned Actions"; fi
 if grep -q 'ownerAffiliations' "$GH_TEST_LOG"; then fail "inbox phase still listed repositories"; fi
+if grep -q '/user/repos' "$GH_TEST_LOG"; then fail "inbox phase still listed owner repositories"; fi
+if grep -q '/orgs/' "$GH_TEST_LOG"; then fail "inbox phase still listed organization repositories"; fi
 
 : >"$GH_TEST_LOG"
 off=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --watch-repo octocat/hello)
@@ -161,6 +189,9 @@ defaults=$(PATH="$sandbox:$PATH" "$HELPER" --phase actions)
 assert_jq '(.repositories|length == 2) and ([.repositories[].nameWithOwner]|index("omacom/omarchy") != null) and ([.repositories[].nameWithOwner]|index("NetCask-Labs/NetCask-commercial") != null)' "$defaults" "default watch list is omarchy and NetCask"
 grep -q '/repos/omacom/omarchy/actions/runs' "$GH_TEST_LOG" || fail "default watch list did not scan omarchy"
 grep -q '/repos/NetCask-Labs/NetCask-commercial/actions/runs' "$GH_TEST_LOG" || fail "default watch list did not scan NetCask"
+if grep -q '/user/repos' "$GH_TEST_LOG"; then fail "default watch list listed every owned repository"; fi
+if grep -q '/users/danjonesio/repos' "$GH_TEST_LOG"; then fail "default watch list listed danjonesio repositories"; fi
+if grep -q '/orgs/NetCask-Labs/repos' "$GH_TEST_LOG"; then fail "default watch list listed every org repository"; fi
 
 mkdir -p "$XDG_CONFIG_HOME/omarchy"
 printf '%s\n' '{"actionRepos":["octocat/hello"]}' >"$XDG_CONFIG_HOME/omarchy/github.json"
@@ -169,6 +200,15 @@ from_config=$(PATH="$sandbox:$PATH" "$HELPER" --phase actions)
 assert_jq '.repositories|length == 1 and .[0].nameWithOwner == "octocat/hello"' "$from_config" "config actionRepos override the default watch list"
 grep -q '/repos/octocat/hello/actions/runs' "$GH_TEST_LOG" || fail "config watch list was not scanned"
 if grep -q '/repos/omacom/omarchy/actions/runs' "$GH_TEST_LOG"; then fail "default watch list used despite config"; fi
+if grep -q '/user/repos' "$GH_TEST_LOG"; then fail "config actionRepos still listed owned repositories"; fi
+rm -f "$XDG_CONFIG_HOME/omarchy/github.json"
+
+printf '%s\n' '{"actionOwners":["octocat"]}' >"$XDG_CONFIG_HOME/omarchy/github.json"
+: >"$GH_TEST_LOG"
+from_owners=$(PATH="$sandbox:$PATH" "$HELPER" --phase actions)
+assert_jq '([.repositories[].nameWithOwner]|index("omacom/omarchy") != null)' "$from_owners" "leftover actionOwners does not expand accounts"
+if grep -q '/user/repos' "$GH_TEST_LOG"; then fail "actionOwners still listed repositories"; fi
+if grep -q '/users/octocat/repos' "$GH_TEST_LOG"; then fail "actionOwners still expanded octocat"; fi
 rm -f "$XDG_CONFIG_HOME/omarchy/github.json"
 
 : >"$GH_TEST_LOG"

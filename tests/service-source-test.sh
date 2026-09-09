@@ -12,12 +12,16 @@ assert_not_contains() {
   [[ $SERVICE_SOURCE != *"$1"* ]] || fail "$2"
 }
 
-assert_not_contains 'actionWatchRepos' \
-  "the service still hard-codes a two-repository Actions watch list"
-assert_not_contains '--watch-repo' \
-  "the service still pins Actions to specific repositories instead of the helper defaults"
+assert_contains 'property var actionWatchRepos: ["omacom/omarchy", "NetCask-Labs/NetCask-commercial"]' \
+  "Actions are not pinned to selected repositories"
+assert_contains 'cmd.push("--watch-repo", actionWatchRepos[i]);' \
+  "the helper is not given the selected watch list"
+assert_contains 'cmd.push("--action-scan", "off");' \
+  "an empty watch list still scans Actions"
+assert_contains 'function addWatchRepo(value)' \
+  "selected repositories cannot be added from the panel"
 assert_not_contains '--watch-owner' \
-  "the service still overrides the helper account watch list"
+  "the service still expands GitHub accounts into every repository"
 assert_contains '"--concurrency", "6"' \
   "Actions concurrency is not passed to the helper"
 assert_not_contains '--repository-scope' \

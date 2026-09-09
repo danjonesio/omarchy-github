@@ -67,6 +67,14 @@ assert_contains 'root.bar.shell.updateEntryInline(root.moduleName, entry)' \
 # inline binding the first time a row is picked.
 assert_contains $'Binding on value { value: github.linkBehavior }' \
   "the open-links dropdown does not re-assert the persisted value"
+assert_contains 'text: "ACTIONS REPOSITORIES"' \
+  "the settings page has no Actions repository picker"
+assert_contains 'function commitWatchRepo()' \
+  "watch repositories cannot be added from the settings page"
+assert_contains 'onClicked: github.removeWatchRepo(modelData)' \
+  "watch repositories cannot be removed from the settings page"
+assert_not_contains 'Actions watch every non-archived repository' \
+  "the settings page still describes owner-wide Actions scanning"
 assert_contains 'blocked: root.settingsOpen' \
   "the key catcher steals keys from the settings controls"
 assert_contains 'visible: !root.settingsOpen' \
@@ -125,6 +133,8 @@ assert_contains $'panelFlick.contentY = Math.max(0, Math.min(maxY, panelFlick.co
 assert_contains $'ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }\n        // Must be a direct child of Flickable or Qt keeps the default\n        // 1–2px wheel distance and this handler never runs.\n        WheelHandler {\n          acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad' \
   "the wheel handler is not a direct child of the panel Flickable"
 
+assert_contains 'Only these repositories are scanned for Actions.' \
+  "settings copy still describes owner-wide Actions scanning"
 assert_not_contains "OWNED REPOSITORIES" \
   "the owned repositories dashboard is still in the panel"
 assert_not_contains "Filter repositories" \

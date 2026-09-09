@@ -16,7 +16,7 @@ The dashboard is ordered by urgency so the most actionable work appears first:
 - **Review requests** — pull requests waiting on you, with approval progress (`0/2 approved`) and check state
 - **My pull requests** — your open PRs with `n/m approved` and the state of their checks
 - **Assigned issues** — keep track of open issues assigned to you
-- **Running Actions** — every non-archived repository under danjonesio and NetCask-Labs; live rows show the job pipeline (`Setup ✓ · Build ● · Test ○`) and current step
+- **Running Actions** — only the repositories you select; live rows show the job pipeline (`Setup ✓ · Build ● · Test ○`) and current step
 
 ## Highlights
 
@@ -141,23 +141,21 @@ The notifications footer also carries **Mark all read**. The first click capture
 
 ## Settings
 
-**Open links** and **Refresh interval** are editable in the panel through the gear button. Changes are written to the widget's entry in `shell.json` and apply immediately. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old. While a watched run is live, Actions are polled about every 5 minutes.
+**Open links**, **Refresh interval**, and **Actions repositories** are editable in the panel through the gear button. Link and interval changes are written to `shell.json`. The Actions list is written to `~/.config/omarchy/github.json` and apply immediately. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old. While a watched run is live, Actions are polled about every 5 minutes.
 
 | Setting | Default |
 | --- | --- |
 | Refresh interval | 900 seconds (15 minutes) |
 | Open links | **Web app window** |
+| Actions repositories | `omacom/omarchy`, `NetCask-Labs/NetCask-commercial` |
 
-Actions watch every non-archived repository under `danjonesio` and `NetCask-Labs`. Override the accounts or add extra repositories in `~/.config/omarchy/github.json`:
+Only the selected repositories are scanned for Actions. Add `owner/name` in the gear page, or edit the list directly:
 
 ```json
 {
-  "actionOwners": [
-    "danjonesio",
-    "NetCask-Labs"
-  ],
   "actionRepos": [
-    "omacom/omarchy"
+    "omacom/omarchy",
+    "NetCask-Labs/NetCask-commercial"
   ]
 }
 ```
@@ -185,7 +183,7 @@ The shell watches local plugin files, making QML iteration fast.
 
 `Service.qml` schedules an executable helper, `omarchy-github-fetch`, which calls GitHub exclusively through `gh api` and processes responses with `jq`.
 
-- REST retrieves notifications and workflow runs on watched accounts.
+- REST retrieves notifications and workflow runs on the selected watch list.
 - GitHub issue search retrieves review requests and assigned issues.
 - GraphQL search retrieves review requests and your authored pull requests together with check rollup and approval counts (`approved` of `requested`), so `0/2 approved` costs no extra request. Reviewer names are omitted on purpose.
 - Live runs fetch jobs so the panel can show the pipeline stage.
@@ -194,7 +192,7 @@ The shell watches local plugin files, making QML iteration fast.
 Run the helper directly to inspect its JSON output:
 
 ```bash
-./omarchy-github-fetch --watch-owner danjonesio --watch-owner NetCask-Labs --phase all | jq
+./omarchy-github-fetch --watch-repo omacom/omarchy --watch-repo NetCask-Labs/NetCask-commercial --phase all | jq
 ```
 
 ## License
