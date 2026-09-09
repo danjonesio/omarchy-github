@@ -99,6 +99,27 @@ error_detail() {
     cut -c1-240
 }
 
+# GET /rate_limit often reports 5000/5000 while X-RateLimit-* on real
+# requests is the bucket this token is actually burning.
+write_rate_from_headers() {
+  local src=$1 dest=$2
+  local limit remaining used reset
+  limit=$(grep -i '^X-RateLimit-Limit:' "$src" | tr -d '\r' | awk '{print $2}' | tail -1)
+  remaining=$(grep -i '^X-RateLimit-Remaining:' "$src" | tr -d '\r' | awk '{print $2}' | tail -1)
+  used=$(grep -i '^X-RateLimit-Used:' "$src" | tr -d '\r' | awk '{print $2}' | tail -1)
+  reset=$(grep -i '^X-RateLimit-Reset:' "$src" | tr -d '\r' | awk '{print $2}' | tail -1)
+  integer "$limit" && integer "$remaining" && integer "$reset" || return 1
+  if ! integer "$used"; then used=$((limit - remaining)); fi
+  ((used < 0)) && used=0
+  jq -n --argjson limit "$limit" --argjson remaining "$remaining" --argjson used "$used" --argjson reset "$reset" '{limit:$limit,remaining:$remaining,used:$used,reset:$reset}' >"$dest"
+}
+
+write_rate_from_graphql() {
+  local src=$1 dest=$2
+  jq -e '.data.rateLimit.limit != null' "$src" >/dev/null 2>&1 || return 1
+  jq '{limit:.data.rateLimit.limit, remaining:.data.rateLimit.remaining, used:(.data.rateLimit.used // (.data.rateLimit.limit - .data.rateLimit.remaining)), reset:(.data.rateLimit.resetAt | fromdateiso8601)}' "$src" >"$dest" 2>/dev/null
+}
+
 # Only PATCH the confirmed thread IDs. Never PUT /notifications with
 # last_read_at, which would mark threads the panel never displayed.
 if ((${#mark_notifications[@]} > 0)); then
@@ -191,6 +212,10 @@ fi
 trap 'rm -rf "$tmp"' EXIT
 warnings="$tmp/warnings"
 : >"$warnings"
+printf 'null\n' >"$tmp/rate.json"
+printf 'null\n' >"$tmp/rate-core.json"
+printf 'null\n' >"$tmp/rate-graphql.json"
+printf 'null\n' >"$tmp/rate-search.json"
 api_error() {
   local label=$1 err=$2 detail
   detail=$(error_detail "$err")
@@ -242,7 +267,7 @@ fetch_search() {
 # Pull-request search is GraphQL so check rollup and review counts arrive with
 # the row. latestReviews is one review per person; approved + still-requested
 # is the n/m denominator. Reviewer logins stay out of the payload on purpose.
-pr_search_query='query($search:String!) { search(query:$search,type:ISSUE,first:50) { issueCount nodes { ... on PullRequest { number title url updatedAt isDraft reviewDecision latestReviews(first:20) { nodes { state } } reviewRequests { totalCount } repository { nameWithOwner } commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } } } }'
+pr_search_query='query($search:String!) { rateLimit { limit remaining used resetAt } search(query:$search,type:ISSUE,first:50) { issueCount nodes { ... on PullRequest { number title url updatedAt isDraft reviewDecision latestReviews(first:20) { nodes { state } } reviewRequests { totalCount } repository { nameWithOwner } commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } } } }'
 jq_pr_nodes="$jq_github_url"'
 def review_stats:
   ((.latestReviews.nodes // []) | map(select(.state == "APPROVED")) | length) as $approved
@@ -274,6 +299,8 @@ fetch_pr_search() {
   if [[ -n $total_out ]]; then
     printf '%s\n' "$raw" | jq '.data.search.issueCount // 0' >"$total_out" 2>/dev/null || printf '0\n' >"$total_out"
   fi
+  printf '%s\n' "$raw" >"$tmp/$label.raw.json"
+  write_rate_from_graphql "$tmp/$label.raw.json" "$tmp/rate-graphql.json" || true
 }
 
 if $fetch_inbox; then
@@ -291,7 +318,6 @@ fi
 printf '[]\n' >"$tmp/repos.json"
 printf '[]\n' >"$tmp/actions.json"
 printf '[]\n' >"$tmp/failed.json"
-printf 'null\n' >"$tmp/rate.json"
 if $fetch_actions && [[ $action_scan != off && ${#watch_repos[@]} -gt 0 ]]; then
   printf '%s\n' "${watch_repos[@]}" >"$tmp/scan-repos"
   jq -n --args '$ARGS.positional | map({nameWithOwner:., url:("https://github.com/" + .)})' -- "${watch_repos[@]}" >"$tmp/repos.json"
@@ -329,10 +355,15 @@ if $fetch_actions && [[ $action_scan != off && ${#watch_repos[@]} -gt 0 ]]; then
   fi
 fi
 
-# /rate_limit does not consume quota. Fetched last so the panel sees this run.
-if rate_raw=$(gh api -H 'Accept: application/vnd.github+json' /rate_limit 2>/dev/null); then
-  printf '%s\n' "$rate_raw" | jq '{core:(.resources.core|{limit,remaining,used,reset}),graphql:(.resources.graphql|{limit,remaining,used,reset}),search:(.resources.search|{limit,remaining,used,reset})}' >"$tmp/rate.json" 2>/dev/null || printf 'null\n' >"$tmp/rate.json"
+# Snapshot usage from a real REST call. /rate_limit is a different bucket and
+# stays at 0/5000 while X-RateLimit-Used on /user is the one that moves.
+if gh api -i /user >"$tmp/user.http" 2>/dev/null; then
+  write_rate_from_headers "$tmp/user.http" "$tmp/rate-core.json" || true
+  if [[ -z ${login:-} ]]; then
+    login=$(awk 'BEGIN{b=0} /^\r?$/{b=1; next} b{print}' "$tmp/user.http" | jq -r '.login // empty' 2>/dev/null || true)
+  fi
 fi
+jq -n --slurpfile core "$tmp/rate-core.json" --slurpfile graphql "$tmp/rate-graphql.json" --slurpfile search "$tmp/rate-search.json" '{core:($core[0] // null), graphql:($graphql[0] // null), search:($search[0] // null)}' >"$tmp/rate.json" 2>/dev/null || printf 'null\n' >"$tmp/rate.json"
 
 warnings_json=$(sort -u "$warnings"|jq -Rsc 'split("\n")|map(select(length>0))')
 state=ready

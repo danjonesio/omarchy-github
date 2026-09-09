@@ -142,7 +142,7 @@ The notifications footer also carries **Mark all read**. The first click capture
 
 ## Settings
 
-The gear page also shows GitHub REST, GraphQL, and search quota from `/rate_limit`, which does not itself count against the limit.
+The gear page shows GitHub REST and GraphQL quota from real request headers. GitHub's `/rate_limit` endpoint is not used; it often stays at 0/5000 while `X-RateLimit-Used` on ordinary calls is the bucket that actually moves.
 
 **Open links**, **Refresh interval**, **Live Actions poll**, and **Actions repositories** are editable in the panel through the gear button. Link and interval changes are written to `shell.json`. The Actions list is written to `~/.config/omarchy/github.json` and apply immediately. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old. While a watched run is live, Actions are polled every 20 seconds by default.
 

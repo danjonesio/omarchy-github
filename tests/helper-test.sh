@@ -65,13 +65,13 @@ if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   if [[ $* == *review-requested:@me* ]]; then
     cat <<'JSON'
-{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Please review","url":"https://github.com/octocat/hello/pull/7","updatedAt":"2026-01-02T00:00:00Z","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","latestReviews":{"nodes":[{"state":"APPROVED"}]},"reviewRequests":{"totalCount":1},"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}]}}}
+{"data":{"rateLimit":{"limit":5000,"remaining":4991,"used":9,"resetAt":"2026-01-01T01:00:00Z"},"search":{"issueCount":1,"nodes":[{"number":7,"title":"Please review","url":"https://github.com/octocat/hello/pull/7","updatedAt":"2026-01-02T00:00:00Z","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","latestReviews":{"nodes":[{"state":"APPROVED"}]},"reviewRequests":{"totalCount":1},"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}]}}}
 JSON
     exit 0
   fi
   if [[ $* == *author:@me* ]]; then
     cat <<'JSON'
-{"data":{"search":{"issueCount":2,"nodes":[{"number":7,"title":"Ship it","url":"https://github.com/octocat/hello/pull/7","updatedAt":"2026-01-05T00:00:00Z","isDraft":false,"reviewDecision":null,"latestReviews":{"nodes":[]},"reviewRequests":{"totalCount":2},"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},{"number":9,"title":"No CI here","url":"https://github.com/octocat/quiet/pull/9","updatedAt":"2026-01-04T00:00:00Z","isDraft":true,"reviewDecision":"CHANGES_REQUESTED","latestReviews":{"nodes":[{"state":"CHANGES_REQUESTED"}]},"reviewRequests":{"totalCount":0},"repository":{"nameWithOwner":"octocat/quiet"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}}
+{"data":{"rateLimit":{"limit":5000,"remaining":4991,"used":9,"resetAt":"2026-01-01T01:00:00Z"},"search":{"issueCount":2,"nodes":[{"number":7,"title":"Ship it","url":"https://github.com/octocat/hello/pull/7","updatedAt":"2026-01-05T00:00:00Z","isDraft":false,"reviewDecision":null,"latestReviews":{"nodes":[]},"reviewRequests":{"totalCount":2},"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},{"number":9,"title":"No CI here","url":"https://github.com/octocat/quiet/pull/9","updatedAt":"2026-01-04T00:00:00Z","isDraft":true,"reviewDecision":"CHANGES_REQUESTED","latestReviews":{"nodes":[{"state":"CHANGES_REQUESTED"}]},"reviewRequests":{"totalCount":0},"repository":{"nameWithOwner":"octocat/quiet"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}}
 JSON
     exit 0
   fi
@@ -80,10 +80,8 @@ JSON
 fi
 endpoint=${*: -1}
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
-if [[ $endpoint == /rate_limit* ]]; then
-  cat <<'JSON'
-{"resources":{"core":{"limit":5000,"remaining":4821,"reset":1788956168,"used":179},"search":{"limit":30,"remaining":28,"reset":1788952628,"used":2},"graphql":{"limit":5000,"remaining":4991,"reset":1788956168,"used":9}}}
-JSON
+if [[ $endpoint == /user ]]; then
+  printf 'HTTP/2.0 200 OK\r\nX-RateLimit-Limit: 5000\r\nX-RateLimit-Remaining: 4821\r\nX-RateLimit-Used: 179\r\nX-RateLimit-Reset: 1788956168\r\nX-RateLimit-Resource: core\r\n\r\n{"login":"octocat"}\n'
   exit 0
 fi
 if [[ $endpoint == /notifications* ]]; then
@@ -163,8 +161,8 @@ assert_jq '(.myPullRequests[0].approved == 0) and (.myPullRequests[0].requested 
 assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true) and (.myPullRequests[1].changesRequested == true)' "$out" "missing rollup falls back to NONE and changes requested is kept"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"
 assert_jq '(.warnings|length) == 0' "$out" "no warnings on the happy path"
-assert_jq '.rateLimit.core.used == 179 and .rateLimit.core.remaining == 4821 and .rateLimit.graphql.limit == 5000' "$out" "rate limit usage is reported"
-grep -q '/rate_limit' "$GH_TEST_LOG" || fail "rate limit was not fetched"
+assert_jq '.rateLimit.core.used == 179 and .rateLimit.core.remaining == 4821 and .rateLimit.graphql.used == 9' "$out" "rate limit usage is reported from real request headers"
+grep -q '/user' "$GH_TEST_LOG" || fail "REST quota was not read from /user"
 grep -q 'author:@me.*sort:updated-desc' "$GH_TEST_LOG" || fail "authored pull request search was not server sorted"
 grep -q 'author:@me.*archived:false' "$GH_TEST_LOG" || fail "authored pull request search was not archive filtered"
 grep -q 'review-requested:@me' "$GH_TEST_LOG" || fail "review request search was not GraphQL"

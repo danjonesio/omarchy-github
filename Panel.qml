@@ -178,11 +178,12 @@ Panel {
   function rateLine(kind, label) {
     var r = github.rateLimit
     if (!r || !r[kind]) return ""
-    var used = Number(r[kind].used)
     var limit = Number(r[kind].limit)
     var remaining = Number(r[kind].remaining)
+    var used = Number(r[kind].used)
     if (!isFinite(limit) || limit <= 0) return ""
-    if (!isFinite(used)) used = isFinite(remaining) ? Math.max(0, limit - remaining) : 0
+    if (isFinite(remaining)) used = Math.max(0, limit - remaining)
+    else if (!isFinite(used)) used = 0
     return label + "  " + used + " / " + limit
   }
 
