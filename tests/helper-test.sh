@@ -80,6 +80,12 @@ JSON
 fi
 endpoint=${*: -1}
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
+if [[ $endpoint == /rate_limit* ]]; then
+  cat <<'JSON'
+{"resources":{"core":{"limit":5000,"remaining":4821,"reset":1788956168,"used":179},"search":{"limit":30,"remaining":28,"reset":1788952628,"used":2},"graphql":{"limit":5000,"remaining":4991,"reset":1788956168,"used":9}}}
+JSON
+  exit 0
+fi
 if [[ $endpoint == /notifications* ]]; then
   cat <<'JSON'
 [{"id":"123","unread":true,"reason":"mention","updated_at":"2026-01-03T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"https://github.com/octocat/hello"},"subject":{"title":"Review this","type":"PullRequest","url":"https://api.github.com/repos/octocat/hello/pulls/7","latest_comment_url":null}},{"id":"124","unread":true,"reason":"subscribed","updated_at":"2026-01-02T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"https://github.com/octocat/hello"},"subject":{"title":"Unknown subject","type":"RepositoryVulnerabilityAlert","url":"https://api.github.com/repos/octocat/hello/private-vulnerability-reporting/1","latest_comment_url":"https://api.github.com/repos/octocat/hello/comments/1"}}]
@@ -157,6 +163,8 @@ assert_jq '(.myPullRequests[0].approved == 0) and (.myPullRequests[0].requested 
 assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true) and (.myPullRequests[1].changesRequested == true)' "$out" "missing rollup falls back to NONE and changes requested is kept"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"
 assert_jq '(.warnings|length) == 0' "$out" "no warnings on the happy path"
+assert_jq '.rateLimit.core.used == 179 and .rateLimit.core.remaining == 4821 and .rateLimit.graphql.limit == 5000' "$out" "rate limit usage is reported"
+grep -q '/rate_limit' "$GH_TEST_LOG" || fail "rate limit was not fetched"
 grep -q 'author:@me.*sort:updated-desc' "$GH_TEST_LOG" || fail "authored pull request search was not server sorted"
 grep -q 'author:@me.*archived:false' "$GH_TEST_LOG" || fail "authored pull request search was not archive filtered"
 grep -q 'review-requested:@me' "$GH_TEST_LOG" || fail "review request search was not GraphQL"

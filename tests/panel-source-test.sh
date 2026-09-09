@@ -109,8 +109,10 @@ assert_not_contains 'id: failedActionDelegate' \
   "the failed-actions graveyard is still in the panel"
 assert_not_contains "RECENT FAILED ACTIONS" \
   "the failed-actions section is still in the panel"
-assert_not_contains 'github.rateLimit' \
-  "the rate-limit footer is still in the panel"
+assert_contains 'text: "GITHUB API"' \
+  "settings do not show GitHub API usage"
+assert_contains 'root.rateLine("core", "REST")' \
+  "REST quota is not shown in settings"
 assert_contains $'onPreviousPage: root.notificationsPage = Math.max(0, root.notificationsPage - 1)\n            onNextPage: root.notificationsPage = Math.min(root.notificationPageCount() - 1, root.notificationsPage + 1)' \
   "notification page controls do not clamp their range"
 assert_contains $'model: root.notificationRows()\n            showExpansionControl: false\n            footerButtonsBordered: true\n            page: root.notificationsPage' \

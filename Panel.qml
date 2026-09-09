@@ -175,6 +175,27 @@ Panel {
     return ""
   }
 
+  function rateLine(kind, label) {
+    var r = github.rateLimit
+    if (!r || !r[kind]) return ""
+    var used = Number(r[kind].used)
+    var limit = Number(r[kind].limit)
+    var remaining = Number(r[kind].remaining)
+    if (!isFinite(limit) || limit <= 0) return ""
+    if (!isFinite(used)) used = isFinite(remaining) ? Math.max(0, limit - remaining) : 0
+    return label + "  " + used + " / " + limit
+  }
+
+  function rateResetLabel() {
+    var r = github.rateLimit
+    var ts = r && r.core ? Number(r.core.reset) : 0
+    if (!isFinite(ts) || ts <= 0) return ""
+    var seconds = Math.max(0, Math.floor(ts - Date.now() / 1000))
+    if (seconds < 60) return "resets in under a minute"
+    if (seconds < 3600) return "resets in " + Math.ceil(seconds / 60) + "m"
+    return "resets in " + Math.ceil(seconds / 3600) + "h"
+  }
+
   function joinDetails(parts) {
     var out = []
     for (var i = 0; i < parts.length; i++) {
@@ -303,7 +324,8 @@ Panel {
         lastFailure: github.failedActions.length > 0 ? (github.failedActions[0].repository + " " + github.failedActions[0].name) : "",
         pageSize: root.notificationPageSize,
         watchRepos: github.actionWatchRepos,
-        actionPollSec: github.actionPollSec
+        actionPollSec: github.actionPollSec,
+        restRemaining: github.rateLimit && github.rateLimit.core ? github.rateLimit.core.remaining : null
       })
     }
     function clickMarkAll(): string {
@@ -683,6 +705,69 @@ Panel {
             id: settingsContent
             width: settingsFlick.width
             spacing: Style.space(20)
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                text: "GITHUB API"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Text {
+                visible: github.rateLimit && github.rateLimit.core
+                width: parent.width
+                text: root.rateLine("core", "REST")
+                textFormat: Text.PlainText
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Text {
+                visible: github.rateLimit && github.rateLimit.graphql
+                width: parent.width
+                text: root.rateLine("graphql", "GraphQL")
+                textFormat: Text.PlainText
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Text {
+                visible: github.rateLimit && github.rateLimit.search
+                width: parent.width
+                text: root.rateLine("search", "Search")
+                textFormat: Text.PlainText
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Text {
+                visible: root.rateResetLabel() !== ""
+                width: parent.width
+                text: root.rateResetLabel()
+                textFormat: Text.PlainText
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Text {
+                visible: !github.rateLimit || !github.rateLimit.core
+                width: parent.width
+                text: "No usage yet. Refresh the dashboard."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
 
             Column {
               width: parent.width

@@ -329,6 +329,11 @@ if $fetch_actions && [[ $action_scan != off && ${#watch_repos[@]} -gt 0 ]]; then
   fi
 fi
 
+# /rate_limit does not consume quota. Fetched last so the panel sees this run.
+if rate_raw=$(gh api -H 'Accept: application/vnd.github+json' /rate_limit 2>/dev/null); then
+  printf '%s\n' "$rate_raw" | jq '{core:(.resources.core|{limit,remaining,used,reset}),graphql:(.resources.graphql|{limit,remaining,used,reset}),search:(.resources.search|{limit,remaining,used,reset})}' >"$tmp/rate.json" 2>/dev/null || printf 'null\n' >"$tmp/rate.json"
+fi
+
 warnings_json=$(sort -u "$warnings"|jq -Rsc 'split("\n")|map(select(length>0))')
 state=ready
 message=""
