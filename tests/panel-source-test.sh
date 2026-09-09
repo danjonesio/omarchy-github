@@ -67,6 +67,10 @@ assert_contains 'root.bar.shell.updateEntryInline(root.moduleName, entry)' \
 # inline binding the first time a row is picked.
 assert_contains $'Binding on value { value: github.linkBehavior }' \
   "the open-links dropdown does not re-assert the persisted value"
+assert_contains 'text: "LIVE ACTIONS POLL"' \
+  "the settings page has no live Actions poll control"
+assert_contains 'persistSettings({ actionPollSec: parseInt(value, 10) })' \
+  "the live Actions poll is not written to shell.json"
 assert_contains 'text: "ACTIONS REPOSITORIES"' \
   "the settings page has no Actions repository picker"
 assert_contains 'function commitWatchRepo()' \

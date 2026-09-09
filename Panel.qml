@@ -38,6 +38,13 @@ Panel {
     { value: "1800", label: "Every 30 minutes" },
     { value: "3600", label: "Every hour" }
   ]
+  readonly property var actionPollOptions: [
+    { value: "20", label: "Every 20 seconds" },
+    { value: "30", label: "Every 30 seconds" },
+    { value: "60", label: "Every minute" },
+    { value: "300", label: "Every 5 minutes" },
+    { value: "0", label: "Only on refresh" }
+  ]
   // Carry sub-notch wheel deltas between events. Touchpads emit many small
   // angleDeltas; mice often emit a fake 1–2px pixelDelta that would otherwise
   // crawl the dashboard a couple of pixels per click.
@@ -224,6 +231,7 @@ Panel {
     // A popup left open would float over the card while it flips.
     linkBehaviorDropdown.close()
     refreshIntervalDropdown.close()
+    actionPollDropdown.close()
     pageFlip.restart()
   }
 
@@ -294,7 +302,8 @@ Panel {
         firstAction: github.actions.length > 0 ? (github.actions[0].repository + " " + github.actions[0].name + " " + (github.actions[0].job || "") + " " + (github.actions[0].step || "")) : "",
         lastFailure: github.failedActions.length > 0 ? (github.failedActions[0].repository + " " + github.failedActions[0].name) : "",
         pageSize: root.notificationPageSize,
-        watchRepos: github.actionWatchRepos
+        watchRepos: github.actionWatchRepos,
+        actionPollSec: github.actionPollSec
       })
     }
     function clickMarkAll(): string {
@@ -729,6 +738,42 @@ Panel {
 
                 // Dropdown values are strings, so the integer round-trips.
                 Binding on value { value: String(root.setting("refreshIntervalSec", 900)) }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                text: "LIVE ACTIONS POLL"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Dropdown {
+                id: actionPollDropdown
+                width: parent.width
+                showLabel: false
+                options: root.actionPollOptions
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.persistSettings({ actionPollSec: parseInt(value, 10) }) }
+
+                Binding on value { value: String(github.actionPollSec) }
+              }
+
+              Text {
+                width: parent.width
+                text: "How often to refresh while a watched workflow is running. The dashboard interval still applies when nothing is live."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
               }
             }
 

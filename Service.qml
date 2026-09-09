@@ -50,6 +50,8 @@ Item {
     // set. A caller added later inherits the guard instead of having to know.
     readonly property bool marking: markProcess.running
     readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 900, 60, 3600)
+    // 0 disables the live Actions poll; the dashboard refresh interval still runs.
+    readonly property int actionPollSec: intSetting("actionPollSec", 20, 0, 300)
     readonly property int unreadCount: notifications.length
     readonly property int actionCount: actions.length
     // A broken check on your own pull request is the kind of thing the bar icon
@@ -549,9 +551,9 @@ Item {
     }
 
     Timer {
-        interval: 300000
+        interval: Math.max(1, root.actionPollSec) * 1000
         repeat: true
-        running: root.actionCount > 0
+        running: root.actionCount > 0 && root.actionPollSec > 0
         onTriggered: {
             if (!fetchProcess.running && !markProcess.running)
                 root.startPhase("actions", false);

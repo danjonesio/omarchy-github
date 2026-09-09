@@ -37,8 +37,10 @@ assert_contains $'function refresh(force) {\n        var forced = force === true
   "refresh and notification marking are not serialized"
 assert_contains 'startPhase("inbox", true)' \
   "refresh does not load the inbox before Actions"
-assert_contains $'interval: 300000\n        repeat: true\n        running: root.actionCount > 0' \
-  "running Actions are not polled while live"
+assert_contains 'readonly property int actionPollSec: intSetting("actionPollSec", 20, 0, 300)' \
+  "the live Actions poll is not configurable"
+assert_contains $'interval: Math.max(1, root.actionPollSec) * 1000\n        repeat: true\n        running: root.actionCount > 0 && root.actionPollSec > 0' \
+  "running Actions are not polled on the configured interval"
 assert_contains $'notifications = visibleNotifications(data.notifications);\n                notificationsRevision++;' \
   "notification refreshes do not invalidate prepared confirmations"
 assert_contains $'hideNotification(value);\n        enqueueMark(value, "read");\n        startQueuedMark();' \

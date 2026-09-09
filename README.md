@@ -141,11 +141,12 @@ The notifications footer also carries **Mark all read**. The first click capture
 
 ## Settings
 
-**Open links**, **Refresh interval**, and **Actions repositories** are editable in the panel through the gear button. Link and interval changes are written to `shell.json`. The Actions list is written to `~/.config/omarchy/github.json` and apply immediately. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old. While a watched run is live, Actions are polled about every 5 minutes.
+**Open links**, **Refresh interval**, **Live Actions poll**, and **Actions repositories** are editable in the panel through the gear button. Link and interval changes are written to `shell.json`. The Actions list is written to `~/.config/omarchy/github.json` and apply immediately. The inbox loads first; Actions fill in afterwards. Opening the panel reuses a cache if it is less than a minute old. While a watched run is live, Actions are polled every 20 seconds by default.
 
 | Setting | Default |
 | --- | --- |
 | Refresh interval | 900 seconds (15 minutes) |
+| Live Actions poll | 20 seconds while a run is live (`0` = only on refresh) |
 | Open links | **Web app window** |
 | Actions repositories | `omacom/omarchy`, `NetCask-Labs/NetCask-commercial` |
 
